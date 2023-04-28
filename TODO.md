@@ -8,7 +8,7 @@ Stuff to be fixed...
 - Run VAE with hires at 1280
 - Transformers version
 - Move Restart Server from WebUI to Launch and reload modules
-- gr.Dropdowns with None selected
+- follow-up on `p.script_args`
 
 ## Features
 
@@ -21,6 +21,7 @@ Stuff to be added...
 - Stream-load models as option for slow storage
 - AMD optimizations
 - Apple optimizations
+- Support multiple models locations
 
 ## Investigate
 
@@ -60,9 +61,3 @@ Tech that can be integrated as part of the core workflow...
 
 ### Pending Code Updates
 
-- update process image -> info
-- add vae info to metadata
-- update GPU utility search paths for better GPU type detection
-- update git flags for wider compatibility
-- update ti training defaults
-- add compatibility opts for some old extensions

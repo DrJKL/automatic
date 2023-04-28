@@ -135,14 +135,13 @@ def update(folder):
         return
     branch = git('branch', folder)
     if 'main' in branch:
-        git('checkout main', folder)
         branch = 'main'
     elif 'master' in branch:
-        git('checkout master', folder)
         branch = 'master'
     else:
-        log.warning(f'Unknown branch for: {folder}')
-        branch = None
+        branch = branch.split('\n')[0].replace('*', '').strip()
+    log.debug(f'Setting branch: {folder} / {branch}')
+    git(f'checkout {branch}', folder)
     if branch is None:
         git('pull --autostash --rebase', folder)
     else:
@@ -378,7 +377,8 @@ def set_environment():
     os.environ.setdefault('GRADIO_ANALYTICS_ENABLED', 'False')
     os.environ.setdefault('SAFETENSORS_FAST_GPU', '1')
     os.environ.setdefault('NUMEXPR_MAX_THREADS', '16')
-    os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
+    if sys.platform == 'darwin':
+        os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 
 
 def check_extensions():
@@ -543,6 +543,7 @@ def run_setup():
     if args.skip_git:
         log.info('Skipping GIT operations')
     check_version()
+    set_environment()
     check_torch()
     install_requirements()
     if check_timestamp():
@@ -565,4 +566,3 @@ def run_setup():
 if __name__ == "__main__":
     parse_args()
     run_setup()
-    set_environment()

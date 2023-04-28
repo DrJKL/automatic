@@ -5,7 +5,6 @@ from copy import deepcopy
 from rich import print # pylint: disable=redefined-builtin
 import torch
 from modules import paths, shared, devices, script_callbacks, sd_models
-from pathlib import Path
 
 
 vae_ignore_keys = {"model_ema.decay", "model_ema.num_updates"}
@@ -94,22 +93,18 @@ def find_vae_near_checkpoint(checkpoint_file):
 
 def resolve_vae(checkpoint_file):
     if shared.cmd_opts.vae is not None:
-        return shared.cmd_opts.vae, 'from commandline argument'
+        return shared.cmd_opts.vae, 'forced'
 
     is_automatic = shared.opts.sd_vae in {"Automatic", "auto"}  # "auto" for people with old config
 
     vae_near_checkpoint = find_vae_near_checkpoint(checkpoint_file)
     if vae_near_checkpoint is not None and (shared.opts.sd_vae_as_default):
-        return vae_near_checkpoint, 'found near the checkpoint'
-    
+        return vae_near_checkpoint, 'near checkpoint'
+
     if is_automatic:
-        for named_vae_location in [vae_path + "\\" + Path(checkpoint_file).stem + ".vae.pt", vae_path + "\\" + Path(checkpoint_file).stem + ".vae.ckpt", vae_path + "\\" + Path(checkpoint_file).stem + ".vae.safetensors"]:
+        for named_vae_location in [os.path.join(vae_path, os.path.splitext(os.path.basename(checkpoint_file))[0] + ".vae.pt"), os.path.join(vae_path, os.path.splitext(os.path.basename(checkpoint_file))[0] + ".vae.ckpt"), os.path.join(vae_path, os.path.splitext(os.path.basename(checkpoint_file))[0] + ".vae.safetensors")]:
             if os.path.isfile(named_vae_location):
-                print(named_vae_location+' found in VAE dir')
-                return named_vae_location, ' found in VAE dir'
-            else:
-                print(f"Couldn't find a VAE with a matching name in {vae_path}, using None instead")
-                return None, None
+                return named_vae_location, 'in VAE dir'
 
     if shared.opts.sd_vae == "None":
         return None, None
@@ -119,7 +114,7 @@ def resolve_vae(checkpoint_file):
         return vae_from_options, 'specified in settings'
 
     if not is_automatic:
-        print(f"Couldn't find VAE named {shared.opts.sd_vae}; using None instead")
+        print(f"VAE not found: {shared.opts.sd_vae}")
 
     return None, None
 

@@ -6,7 +6,6 @@ if not defined VENV_DIR (set "VENV_DIR=%~dp0%venv")
 set PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.6,max_split_size_mb:128
 
 set ERROR_REPORTING=FALSE
-
 mkdir tmp 2>NUL
 
 %PYTHON% -c "" >tmp/stdout.txt 2>tmp/stderr.txt
@@ -39,14 +38,14 @@ goto :show_stdout_stderr
 
 :activate_venv
 set PYTHON="%VENV_DIR%\Scripts\Python.exe"
-echo venv %PYTHON%
+echo Using VENV: %VENV_DIR%
 
 :skip_venv
 if [%ACCELERATE%] == ["True"] goto :accelerate
 goto :launch
 
 :accelerate
-echo Checking for accelerate
+echo Checking for accelerate: %ACCELERATE%
 set ACCELERATE="%VENV_DIR%\Scripts\accelerate.exe"
 if EXIST %ACCELERATE% goto :accelerate_launch
 
@@ -57,7 +56,7 @@ exit /b
 
 :accelerate_launch
 echo Accelerating
-%ACCELERATE% launch --num_cpu_threads_per_process=6 launch.py
+%ACCELERATE% launch --num_cpu_threads_per_process=6 launch.py %*
 pause
 exit /b
 
