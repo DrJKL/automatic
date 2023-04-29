@@ -243,7 +243,7 @@ options_templates.update(options_section(('sd', "Stable Diffusion"), {
     "always_batch_cond_uncond": OptionInfo(False, "Disables cond/uncond batching that is enabled to save memory with --medvram or --lowvram"),
     "multiple_tqdm": OptionInfo(False, "Add a second progress bar to the console that shows progress for an entire job.", gr.Checkbox, {"visible": False}),
     "print_hypernet_extra": OptionInfo(False, "Print extra hypernetwork information to console.", gr.Checkbox, {"visible": False}),
-    "dimensions_and_batch_together": OptionInfo(False, "", gr.Checkbox, {"visible": False}),
+    "dimensions_and_batch_together": OptionInfo(True, "", gr.Checkbox, {"visible": False}),
 }))
 
 options_templates.update(options_section(('system-paths', "System Paths"), {
@@ -253,6 +253,7 @@ options_templates.update(options_section(('system-paths', "System Paths"), {
     "vae_dir": OptionInfo(os.path.join(paths.models_path, 'VAE'), "Path to directory with VAE files"),
     "embeddings_dir": OptionInfo(os.path.join(paths.models_path, 'embeddings'), "Embeddings directory for textual inversion"),
     "embeddings_templates_dir": OptionInfo(os.path.join(paths.script_path, 'train/templates'), "Embeddings train templates directory"),
+    "embeddings_train_log": OptionInfo(os.path.join(paths.script_path, 'train.csv'), "Embeddings train log file"),
     "hypernetwork_dir": OptionInfo(os.path.join(paths.models_path, 'hypernetworks'), "Hypernetwork directory"),
     "codeformer_models_path": OptionInfo(os.path.join(paths.models_path, 'Codeformer'), "Path to directory with codeformer model file(s)."),
     "gfpgan_models_path": OptionInfo(os.path.join(paths.models_path, 'GFPGAN'), "Path to directory with GFPGAN model file(s)"),
