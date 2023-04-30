@@ -3,6 +3,10 @@ import html
 import csv
 from collections import namedtuple
 import torch
+try:
+    import intel_extension_for_pytorch as ipex
+except:
+    pass
 import tqdm
 import safetensors.torch
 from rich import print # pylint: disable=redefined-builtin
@@ -174,7 +178,7 @@ class EmbeddingDatabase:
             if len(emb.shape) == 1:
                 emb = emb.unsqueeze(0)
         else:
-            raise Exception(f"Couldn't identify {filename} as neither textual inversion embedding nor diffuser concept.")
+            raise RuntimeError(f"Couldn't identify {filename} as neither textual inversion embedding nor diffuser concept.")
 
         vec = emb.detach().to(devices.device, dtype=torch.float32)
         embedding = Embedding(vec, name)
@@ -347,7 +351,8 @@ def validate_train_inputs(model_name, learn_rate, batch_size, gradient_step, dat
         assert log_directory, "Log directory is empty"
 
 
-def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_step, data_root, log_directory, training_width, training_height, varsize, steps, clip_grad_mode, clip_grad_value, shuffle_tags, tag_drop_out, latent_sampling_method, use_weight, create_image_every, save_embedding_every, template_filename, save_image_with_stored_embedding, preview_from_txt2img, preview_prompt, preview_negative_prompt, preview_steps, preview_sampler_index, preview_cfg_scale, preview_seed, preview_width, preview_height):
+def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_step, data_root, log_directory, training_width, training_height, varsize, steps, clip_grad_mode, clip_grad_value, shuffle_tags, tag_drop_out, latent_sampling_method, use_weight, create_image_every, save_embedding_every, template_filename, save_image_with_stored_embedding, preview_from_txt2img, preview_prompt, preview_negative_prompt, preview_steps, preview_sampler_index, preview_cfg_scale, preview_seed, preview_width, preview_height): # pylint: disable=unused_argument
+
     save_embedding_every = save_embedding_every or 0
     create_image_every = create_image_every or 0
     template_file = textual_inversion_templates.get(template_filename, None)
@@ -434,7 +439,10 @@ def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_st
         else:
             print("No saved optimizer exists in checkpoint")
 
-    scaler = torch.cuda.amp.GradScaler()
+    if shared.cmd_opts.use_ipex:
+        scaler = torch.xpu.amp.GradScaler()
+    else:
+        scaler = torch.cuda.amp.GradScaler()
 
     batch_size = ds.batch_size
     gradient_step = ds.gradient_step
@@ -526,7 +534,7 @@ def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_st
                     save_embedding(embedding, optimizer, checkpoint, embedding_name_every, last_saved_file, remove_cached_checksum=True)
                     embedding_yet_to_be_embedded = True
 
-                write_loss(log_directory, shared.ops.embeddings_train_log, embedding.step, steps_per_epoch, {
+                write_loss(log_directory, shared.opts.embeddings_train_log, embedding.step, steps_per_epoch, {
                     "loss": f"{loss_step:.7f}",
                     "learn_rate": scheduler.learn_rate
                 })

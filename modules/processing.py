@@ -6,7 +6,12 @@ import random
 import logging
 from typing import Any, Dict, List
 
+import psutil
 import torch
+try:
+    import intel_extension_for_pytorch as ipex
+except:
+    pass
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 import cv2
@@ -39,6 +44,41 @@ logger = logging.getLogger(__name__)
 # some of those options should not be changed at all because they would break the model, so I removed them from options.
 opt_C = 4
 opt_f = 8
+
+
+def memory_stats():
+    def gb(val: float):
+        return round(val / 1024 / 1024 / 1024, 2)
+    mem = {}
+    try:
+        process = psutil.Process(os.getpid())
+        res = process.memory_info()
+        ram_total = 100 * res.rss / process.memory_percent()
+        ram = { 'used': gb(res.rss), 'total': gb(ram_total) }
+        mem.update({ 'ram': ram })
+    except Exception as e:
+        mem.update({ 'ram': e })
+    try:
+        if cmd_opts.use_ipex:
+            gpu = { 'used': gb(torch.xpu.memory_allocated()), 'total': gb(torch.xpu.get_device_properties("xpu").total_memory) }
+            s = dict(torch.xpu.memory_stats("xpu"))
+            mem.update({
+                'gpu': gpu,
+                'retries': s['num_alloc_retries'],
+                'oom': s['num_ooms']
+            })
+        elif torch.cuda.is_available():
+            s = torch.cuda.mem_get_info()
+            gpu = { 'used': gb(s[1] - s[0]), 'total': gb(s[1]) }
+            s = dict(torch.cuda.memory_stats(shared.device))
+            mem.update({
+                'gpu': gpu,
+                'retries': s['num_alloc_retries'],
+                'oom': s['num_ooms']
+            })
+    except:
+        pass
+    return mem
 
 
 def setup_color_correction(image):
@@ -160,7 +200,8 @@ class StableDiffusionProcessing:
             self.seed_resize_from_h = 0
             self.seed_resize_from_w = 0
         self.scripts = None
-        self.script_args = script_args
+        self.script_args = script_args or []
+        self.per_script_args = {}
         self.all_prompts = None
         self.all_negative_prompts = None
         self.all_seeds = None
@@ -316,7 +357,6 @@ class Processed:
         self.seed = int(self.seed if type(self.seed) != list else self.seed[0]) if self.seed is not None else -1
         self.subseed = int(self.subseed if type(self.subseed) != list else self.subseed[0]) if self.subseed is not None else -1
         self.is_using_inpainting_conditioning = p.is_using_inpainting_conditioning
-
         self.all_prompts = all_prompts or p.all_prompts or [self.prompt]
         self.all_negative_prompts = all_negative_prompts or p.all_negative_prompts or [self.negative_prompt]
         self.all_seeds = all_seeds or p.all_seeds or [self.seed]
@@ -891,8 +931,6 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             if not state.processing_has_refined_job_count:
                 if state.job_count == -1:
                     state.job_count = self.n_iter
-
-                shared.total_tqdm.updateTotal((self.steps + (self.hr_second_pass_steps or self.steps)) * state.job_count)
                 state.job_count = state.job_count * 2
                 state.processing_has_refined_job_count = True
 
@@ -970,8 +1008,9 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         shared.state.nextjob()
 
         img2img_sampler_name = self.sampler_name
-        if self.sampler_name in ['PLMS', 'UniPC']:  # PLMS/UniPC do not support img2img so we just silently switch to DDIM
-            img2img_sampler_name = shared.opts.fallback_sampler
+        force_latent_upscaler = shared.opts.data.get('xyz_fallback_sampler')
+        if self.sampler_name in ['PLMS'] or (force_latent_upscaler is not None and force_latent_upscaler != 'None'):
+            img2img_sampler_name = force_latent_upscaler or shared.opts.fallback_sampler # PLMS does not support img2img, use fallback instead
         self.sampler = sd_samplers.create_sampler(img2img_sampler_name, self.sd_model)
 
         samples = samples[:, :, self.truncate_y//2:samples.shape[2]-(self.truncate_y+1)//2, self.truncate_x//2:samples.shape[3]-(self.truncate_x+1)//2]
@@ -1024,29 +1063,24 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
         self.image_conditioning = None
 
     def init(self, all_prompts, all_seeds, all_subseeds):
-        if self.sampler_name in ['PLMS', 'UniPC']:  # PLMS/UniPC do not support img2img so we just silently switch to DDIM
-            self.sampler_name = shared.opts.fallback_sampler
+        force_latent_upscaler = shared.opts.data.get('xyz_fallback_sampler')
+        if self.sampler_name in ['PLMS'] or (force_latent_upscaler is not None and force_latent_upscaler != 'None'):
+            self.sampler_name = force_latent_upscaler or shared.opts.fallback_sampler # PLMS does not support img2img, use fallback instead
         self.sampler = sd_samplers.create_sampler(self.sampler_name, self.sd_model)
         crop_region = None
-
         image_mask = self.image_mask
-
         if image_mask is not None:
             image_mask = image_mask.convert('L')
-
             if self.inpainting_mask_invert:
                 image_mask = ImageOps.invert(image_mask)
-
             if self.mask_blur > 0:
                 image_mask = image_mask.filter(ImageFilter.GaussianBlur(self.mask_blur))
-
             if self.inpaint_full_res:
                 self.mask_for_overlay = image_mask
                 mask = image_mask.convert('L')
                 crop_region = masking.get_crop_region(np.array(mask), self.inpaint_full_res_padding)
                 crop_region = masking.expand_crop_region(crop_region, self.width, self.height, mask.width, mask.height)
                 x1, y1, x2, y2 = crop_region
-
                 mask = mask.crop(crop_region)
                 image_mask = images.resize_image(2, mask, self.width, self.height)
                 self.paste_to = (x1, y1, x2-x1, y2-y1)
@@ -1055,42 +1089,31 @@ class StableDiffusionProcessingImg2Img(StableDiffusionProcessing):
                 np_mask = np.array(image_mask)
                 np_mask = np.clip((np_mask.astype(np.float32)) * 2, 0, 255).astype(np.uint8)
                 self.mask_for_overlay = Image.fromarray(np_mask)
-
             self.overlay_images = []
-
         latent_mask = self.latent_mask if self.latent_mask is not None else image_mask
-
         add_color_corrections = opts.img2img_color_correction and self.color_corrections is None
         if add_color_corrections:
             self.color_corrections = []
         imgs = []
         for img in self.init_images:
             image = images.flatten(img, opts.img2img_background_color)
-
             if crop_region is None and self.resize_mode != 3:
                 image = images.resize_image(self.resize_mode, image, self.width, self.height)
-
             if image_mask is not None:
                 image_masked = Image.new('RGBa', (image.width, image.height))
                 image_masked.paste(image.convert("RGBA").convert("RGBa"), mask=ImageOps.invert(self.mask_for_overlay.convert('L')))
-
                 self.overlay_images.append(image_masked.convert('RGBA'))
-
             # crop_region is not None if we are doing inpaint full res
             if crop_region is not None:
                 image = image.crop(crop_region)
                 image = images.resize_image(2, image, self.width, self.height)
-
             if image_mask is not None:
                 if self.inpainting_fill != 1:
                     image = masking.fill(image, latent_mask)
-
             if add_color_corrections:
                 self.color_corrections.append(setup_color_correction(image))
-
             image = np.array(image).astype(np.float32) / 255.0
             image = np.moveaxis(image, 2, 0)
-
             imgs.append(image)
 
         if len(imgs) == 1:
