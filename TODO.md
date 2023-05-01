@@ -13,13 +13,13 @@ Stuff to be added...
 
 - Update `README.md`
 - Add Gradio theme maker
-- Transformers version
 - Create new GitHub hooks/actions for CI/CD  
 - Redo Extensions tab: <https://vladmandic.github.io/sd-extension-manager/pages/extensions.html>
 - Stream-load models as option for slow storage
 - Auto-test `torch.layer_norm` for FP16
 - Monitor file changes by misbehaving extensions
 - Kitchen theme: <https://github.com/canisminor1990/sd-webui-kitchen-theme>
+- Lightbox improvements
 
 ## Investigate
 
