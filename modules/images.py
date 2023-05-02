@@ -14,7 +14,7 @@ import piexif.helper
 from PIL import Image, ImageFont, ImageDraw, PngImagePlugin, ExifTags
 
 from modules import sd_samplers, shared, script_callbacks, errors
-from modules.shared import opts, cmd_opts # pylint: disable=unused-import
+from modules.shared import opts, log
 
 LANCZOS = (Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS)
 
@@ -258,7 +258,7 @@ def resize_image(resize_mode, im, width, height, upscaler_name=None):
             upscalers = [x for x in shared.sd_upscalers if x.name == upscaler_name]
             if len(upscalers) == 0:
                 upscaler = shared.sd_upscalers[0]
-                print(f"could not find upscaler named {upscaler_name or '<empty string>'}, using {upscaler.name} as a fallback")
+                log.warning(f"could not find upscaler named {upscaler_name or '<empty string>'}, using {upscaler.name} as a fallback")
             else:
                 upscaler = upscalers[0]
 
@@ -532,39 +532,33 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
 
     params = script_callbacks.ImageSaveParams(image, p, fullfn, pnginfo)
     script_callbacks.before_image_saved_callback(params)
-
     image = params.image
     fullfn = params.filename
-    info = params.pnginfo.get(pnginfo_section_name, None)
+
+    exifinfo_data = params.pnginfo.get('UserComment', '')
+    if len(exifinfo_data) > 0:
+        exifinfo_data = exifinfo_data + ', ' + params.pnginfo.get(pnginfo_section_name, '')
+    else:
+        exifinfo_data = params.pnginfo.get(pnginfo_section_name, '')
 
     def _atomically_save_image(image_to_save, filename_without_extension, extension):
         # save image with .tmp extension to avoid race condition when another process detects new image in the directory
         temp_file_path = filename_without_extension + ".tmp"
         image_format = Image.registered_extensions()[extension]
-
         if extension.lower() == '.png':
             pnginfo_data = PngImagePlugin.PngInfo()
             if opts.enable_pnginfo:
                 for k, v in params.pnginfo.items():
                     pnginfo_data.add_text(k, str(v))
-
             image_to_save.save(temp_file_path, format=image_format, quality=opts.jpeg_quality, pnginfo=pnginfo_data)
-
         elif extension.lower() in (".jpg", ".jpeg", ".webp"):
             if image_to_save.mode == 'RGBA':
                 image_to_save = image_to_save.convert("RGB")
             elif image_to_save.mode == 'I;16':
                 image_to_save = image_to_save.point(lambda p: p * 0.0038910505836576).convert("RGB" if extension.lower() == ".webp" else "L")
-
             image_to_save.save(temp_file_path, format=image_format, quality=opts.jpeg_quality, lossless=opts.webp_lossless)
-
-            if opts.enable_pnginfo and info is not None:
-                exif_bytes = piexif.dump({
-                    "Exif": {
-                        piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(info or "", encoding="unicode")
-                    },
-                })
-
+            if opts.enable_pnginfo:
+                exif_bytes = piexif.dump({ "Exif": { piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(exifinfo_data or "", encoding="unicode") } })
                 piexif.insert(exif_bytes, temp_file_path)
         else:
             image_to_save.save(temp_file_path, format=image_format, quality=opts.jpeg_quality)
@@ -582,10 +576,10 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
 
     image.already_saved_as = fullfn
 
-    if opts.save_txt and info is not None:
+    if opts.save_txt and len(exifinfo_data) > 0:
         txt_fullfn = f"{fullfn_without_extension}.txt"
         with open(txt_fullfn, "w", encoding="utf8") as file:
-            file.write(info + "\n")
+            file.write(exifinfo_data + "\n")
     else:
         txt_fullfn = None
 
@@ -594,7 +588,7 @@ def save_image(image, path, basename, seed=None, prompt=None, extension='png', i
     return fullfn, txt_fullfn
 
 def safe_decode_string(s: bytes):
-    remove_prefix = lambda text, prefix: text[len(prefix):] if text.startswith(prefix) else text
+    remove_prefix = lambda text, prefix: text[len(prefix):] if text.startswith(prefix) else text # pylint: disable=unnecessary-lambda-assignment
     for encoding in ['utf-8', 'utf-16', 'ascii', 'latin_1', 'cp1252', 'cp437']: # try different encodings
         try:
             s = remove_prefix(s, b'UNICODE')
