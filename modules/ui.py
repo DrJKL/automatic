@@ -293,7 +293,7 @@ def create_output_panel(tabname, outdir):
 def create_sampler_and_steps_selection(choices, tabname):
     with FormRow(elem_id=f"sampler_selection_{tabname}"):
         sampler_index = gr.Dropdown(label='Sampling method', elem_id=f"{tabname}_sampling", choices=[x.name for x in choices], value="UniPC" if tabname == 'txt2img' else "Euler a", type="index")
-        steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=10 if tabname == 'txt2img' else 20)
+        steps = gr.Slider(minimum=1, maximum=150, step=1, elem_id=f"{tabname}_steps", label="Sampling steps", value=20)
     return steps, sampler_index
 
 
@@ -1229,38 +1229,32 @@ def create_ui():
 
     def run_settings(*args):
         changed = []
-
         for key, value, comp in zip(opts.data_labels.keys(), args, components):
             assert comp == dummy_component or opts.same_type(value, opts.data_labels[key].default), f"Bad value for setting {key}: {value}; expecting {type(opts.data_labels[key].default).__name__}"
-
         for key, value, comp in zip(opts.data_labels.keys(), args, components):
             if comp == dummy_component:
                 continue
-
             if opts.set(key, value):
                 changed.append(key)
-
         try:
             opts.save(shared.config_filename)
         except RuntimeError:
-            return opts.dumpjson(), f'{len(changed)} settings changed without save: {", ".join(changed)}.'
-        return opts.dumpjson(), f'{len(changed)} settings changed{": " if len(changed) > 0 else ""}{", ".join(changed)}.'
+            return opts.dumpjson(), f'{len(changed)} Settings changed without save: {", ".join(changed)}'
+        return opts.dumpjson(), f'{len(changed)} Settings changed{": " if len(changed) > 0 else ""}{", ".join(changed)}'
 
     def run_settings_single(value, key):
         if not opts.same_type(value, opts.data_labels[key].default):
             return gr.update(visible=True), opts.dumpjson()
-
         if not opts.set(key, value):
             return gr.update(value=getattr(opts, key)), opts.dumpjson()
-
         opts.save(shared.config_filename)
-
         return get_value_for_setting(key), opts.dumpjson()
 
     with gr.Blocks(analytics_enabled=False) as settings_interface:
         with gr.Row():
             settings_submit = gr.Button(value="Apply settings", variant='primary', elem_id="settings_submit")
-            restart_submit = gr.Button(value="Restart UI", variant='primary', elem_id="restart_submit")
+            restart_submit = gr.Button(value="Restart server", variant='primary', elem_id="restart_submit")
+            shutdown_submit = gr.Button(value="Shutdown server", variant='primary', elem_id="shutdown_submit")
             preview_theme = gr.Button(value="Preview theme", variant='primary', elem_id="settings_preview_theme")
             unload_sd_model = gr.Button(value='Unload checkpoint', variant='primary', elem_id="sett_unload_sd_model")
             reload_sd_model = gr.Button(value='Reload checkpoint', variant='primary', elem_id="sett_reload_sd_model")
@@ -1368,7 +1362,7 @@ def create_ui():
     for _interface, label, _ifid in interfaces:
         shared.tab_names.append(label)
 
-    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="Stable Diffusion") as demo:
+    with gr.Blocks(theme=shared.gradio_theme, analytics_enabled=False, title="SD.Next") as demo:
         with gr.Row(elem_id="quicksettings", variant="compact"):
             for i, k, item in sorted(quicksettings_list, key=lambda x: quicksettings_names.get(x[1], x[0])):
                 component = create_setting_component(k, is_quicksettings=True)
@@ -1392,7 +1386,8 @@ def create_ui():
             inputs=components,
             outputs=[text_settings, result],
         )
-        restart_submit.click(fn=shared.restart_server, _js="restart_reload")
+        restart_submit.click(fn=lambda x: shared.restart_server(restart=True), _js="restart_reload")
+        shutdown_submit.click(fn=lambda x: shared.restart_server(restart=False), _js="restart_reload")
 
         for i, k, item in quicksettings_list:
             component = component_dict[k]
