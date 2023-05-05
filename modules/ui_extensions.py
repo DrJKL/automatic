@@ -4,12 +4,14 @@ import time
 import shutil
 import errno
 import html
+from datetime import datetime
 import git
 import gradio as gr
 from modules import extensions, shared, paths, errors
 from modules.call_queue import wrap_gradio_gpu_call
 
 available_extensions = {"extensions": []}
+STYLE_PRIMARY = ' style="color: var(--primary-400)"'
 
 
 def check_access():
@@ -18,32 +20,22 @@ def check_access():
 
 def apply_and_restart(disable_list, update_list, disable_all):
     check_access()
-
     disabled = json.loads(disable_list)
     assert type(disabled) == list, f"wrong disable_list data for apply_and_restart: {disable_list}"
-
     update = json.loads(update_list)
     assert type(update) == list, f"wrong update_list data for apply_and_restart: {update_list}"
-
     update = set(update)
-
     for ext in extensions.extensions:
         if ext.name not in update:
             continue
-
         try:
             ext.fetch_and_reset_hard()
         except Exception as e:
             errors.display(e, f'extensions apply update: {ext.name}')
-
     shared.opts.disabled_extensions = disabled
     shared.opts.disable_all_extensions = disable_all
     shared.opts.save(shared.config_filename)
-
-    # shared.state.interrupt()
-    # shared.state.need_restart = True
-    # shared.restart_server()
-    shared.log.warning('Extension list updated - please restart the server')
+    shared.restart_server(restart=True)
 
 
 def check_updates(_id_task, disable_list):
@@ -69,6 +61,16 @@ def check_updates(_id_task, disable_list):
         shared.state.nextjob()
 
     return extension_table(), ""
+
+
+def make_commit_link(commit_hash, remote, text=None):
+    if text is None:
+        text = commit_hash[:8]
+    if remote.startswith("https://github.com/"):
+        href = os.path.join(remote, "commit", commit_hash)
+        return f'<a href="{href}" target="_blank">{text}</a>'
+    else:
+        return text
 
 
 def extension_table():
@@ -98,14 +100,18 @@ def extension_table():
 
         style = ""
         if shared.opts.disable_all_extensions == "extra" and not ext.is_builtin or shared.opts.disable_all_extensions == "all":
-            style = ' style="color: var(--primary-400)"'
+            style = STYLE_PRIMARY
+
+        version_link = ext.version
+        if ext.commit_hash and ext.remote:
+            version_link = make_commit_link(ext.commit_hash, ext.remote, ext.version)
 
         code += f"""
             <tr>
                 <td><label{style}><input class="gr-check-radio gr-checkbox" name="enable_{html.escape(ext.name)}" type="checkbox" {'checked="checked"' if ext.enabled else ''}>{html.escape(ext.name)}</label></td>
                 <td>{"system" if ext.is_builtin else 'user'}</td>
                 <td>{remote}</td>
-                <td>{ext.version}</td>
+                <td>{version_link}</td>
                 <td{' class="extension_status"' if ext.remote is not None else ''}>{ext_status}</td>
             </tr>
     """
@@ -126,7 +132,7 @@ def normalize_git_url(url):
     return url
 
 
-def install_extension_from_url(dirname, url):
+def install_extension_from_url(dirname, url, branch_name=None):
     check_access()
 
     assert url, 'No URL specified'
@@ -147,10 +153,17 @@ def install_extension_from_url(dirname, url):
 
     try:
         shutil.rmtree(tmpdir, True)
-        with git.Repo.clone_from(url, tmpdir) as repo:
-            repo.remote().fetch()
-            for submodule in repo.submodules:
-                submodule.update()
+        if not branch_name:
+            # if no branch is specified, use the default branch
+            with git.Repo.clone_from(url, tmpdir) as repo:
+                repo.remote().fetch()
+                for submodule in repo.submodules:
+                    submodule.update()
+        else:
+            with git.Repo.clone_from(url, tmpdir, branch=branch_name) as repo:
+                repo.remote().fetch()
+                for submodule in repo.submodules:
+                    submodule.update()
         try:
             os.rename(tmpdir, target_dir)
         except OSError as err:
@@ -287,10 +300,10 @@ def create_ui():
 
     with gr.Blocks(analytics_enabled=False) as ui:
         with gr.Tabs(elem_id="tabs_extensions"):
-            with gr.TabItem("Installed"):
+            with gr.TabItem("Installed", id="installed"):
 
                 with gr.Row(elem_id="extensions_installed_top"):
-                    apply = gr.Button(value="Apply (restart required)", variant="primary")
+                    apply = gr.Button(value="Apply & restart", variant="primary")
                     check = gr.Button(value="Check for updates")
                     extensions_disable_all = gr.Radio(label="Disable all extensions", choices=["none", "extra", "all"], value=shared.opts.disable_all_extensions, elem_id="extensions_disable_all")
                     extensions_disabled_list = gr.Text(elem_id="extensions_disabled_list", visible=False).style(container=False)
@@ -320,7 +333,7 @@ def create_ui():
                     outputs=[extensions_table, info],
                 )
 
-            with gr.TabItem("Available"):
+            with gr.TabItem("Available", id="available"):
                 with gr.Row():
                     refresh_available_extensions_button = gr.Button(value="Load from:", variant="primary")
                     available_extensions_index = gr.Text(value="https://raw.githubusercontent.com/AUTOMATIC1111/stable-diffusion-webui-extensions/master/index.json", label="Extension index URL").style(container=False)
@@ -367,15 +380,16 @@ def create_ui():
                     outputs=[available_extensions_table, install_result]
                 )
 
-            with gr.TabItem("Install from URL"):
+            with gr.TabItem("Install from URL", id="install_from_url"):
                 install_url = gr.Text(label="URL for extension's git repository")
+                install_branch = gr.Text(label="Specific branch name", placeholder="Leave empty for default main branch")
                 install_dirname = gr.Text(label="Local directory name", placeholder="Leave empty for auto")
                 install_button = gr.Button(value="Install", variant="primary")
                 install_result = gr.HTML(elem_id="extension_install_result")
 
                 install_button.click(
                     fn=modules.ui.wrap_gradio_call(install_extension_from_url, extra_outputs=[gr.update()]),
-                    inputs=[install_dirname, install_url],
+                    inputs=[install_dirname, install_url, install_branch],
                     outputs=[extensions_table, install_result],
                 )
 

@@ -321,6 +321,16 @@ function selectCheckpoint(name){
     gradioApp().getElementById('change_checkpoint').click()
 }
 
+function updateImg2imgResizeToTextAfterChangingImage(){
+  // At the time this is called from gradio, the image has no yet been replaced.
+  // There may be a better solution, but this is simple and straightforward so I'm going with it.
+  setTimeout(function() {
+      gradioApp().getElementById('img2img_update_resize_to').click()
+  }, 500);
+
+  return []
+}
+
 function create_theme_element() {
   el = document.createElement('img');
   el.id = 'theme-preview';
@@ -348,6 +358,9 @@ function preview_theme() {
 }
 
 function reconnect_ui() {
+  const api_logo = Array.from(gradioApp().querySelectorAll("img")).filter((el) => el?.src?.endsWith('api-logo.svg'))
+  if (api_logo.length > 0) api_logo[0].remove()
+
   const el1 = gradioApp().getElementById('txt2img_gallery_container')
   const el2 = gradioApp().getElementById('txt2img_gallery')
   const task_id = localStorage.getItem('task')
@@ -374,7 +387,6 @@ function reconnect_ui() {
         loadingStarted = Date.now();
         loadingMonitor = setInterval(() => {
           elapsed = Date.now() - loadingStarted;
-          console.log('Loading', elapsed)
           if (elapsed > 3000 && loading) loading.style.display = 'none';
         }, 5000);
       }
