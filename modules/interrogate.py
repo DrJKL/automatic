@@ -26,7 +26,7 @@ def category_types():
 def download_default_clip_interrogate_categories(content_dir):
     shared.log.info("Downloading CLIP categories...")
 
-    tmpdir = content_dir + "_tmp"
+    tmpdir = f"{content_dir}_tmp"
     cat_types = ["artists", "flavors", "mediums", "movements"]
 
     try:
@@ -118,14 +118,14 @@ class InterrogateModels:
     def load(self):
         if self.blip_model is None:
             self.blip_model = self.load_blip_model()
-            if not shared.cmd_opts.no_half and not self.running_on_cpu:
+            if not shared.opts.no_half and not self.running_on_cpu:
                 self.blip_model = self.blip_model.half()
 
         self.blip_model = self.blip_model.to(devices.device_interrogate)
 
         if self.clip_model is None:
             self.clip_model, self.clip_preprocess = self.load_clip_model()
-            if not shared.cmd_opts.no_half and not self.running_on_cpu:
+            if not shared.opts.no_half and not self.running_on_cpu:
                 self.clip_model = self.clip_model.half()
 
         self.clip_model = self.clip_model.to(devices.device_interrogate)
@@ -211,7 +211,7 @@ class InterrogateModels:
                         if shared.opts.interrogate_return_ranks:
                             res += f", ({match}:{score/100:.3f})"
                         else:
-                            res += ", " + match
+                            res += f", {match}"
 
         except Exception as e:
             errors.display(e, 'interrogate')

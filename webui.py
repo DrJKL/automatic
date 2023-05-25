@@ -5,6 +5,7 @@ import signal
 import asyncio
 import logging
 import warnings
+from threading import Thread
 from modules import timer, errors
 
 startup_timer = timer.Timer()
@@ -21,11 +22,13 @@ if ".dev" in torch.__version__ or "+git" in torch.__version__:
     torch.__version__ = re.search(r'[\d.]+[\d]', torch.__version__).group(0)
 logging.getLogger("xformers").addFilter(lambda record: 'A matching Triton is not available' not in record.getMessage())
 logging.getLogger("pytorch_lightning").disabled = True
-warnings.filterwarnings(action="ignore", category=DeprecationWarning, module="pytorch_lightning")
+warnings.filterwarnings(action="ignore", category=DeprecationWarning)
+warnings.filterwarnings(action="ignore", category=FutureWarning)
 warnings.filterwarnings(action="ignore", category=UserWarning, module="torchvision")
 startup_timer.record("torch")
 
 from modules import import_hook # pylint: disable=W0611,C0411,C0412
+from fastapi import FastAPI # pylint: disable=W0611,C0411
 import gradio # pylint: disable=W0611,C0411
 startup_timer.record("gradio")
 errors.install([gradio])
@@ -85,6 +88,9 @@ def initialize():
     log.debug('Entering Initialize')
     check_rollback_vae()
 
+    modules.sd_vae.refresh_vae_list()
+    startup_timer.record("vae")
+
     extensions.list_extensions()
     startup_timer.record("extensions")
 
@@ -104,24 +110,21 @@ def initialize():
     modelloader.load_upscalers()
     startup_timer.record("upscalers")
 
-    modules.sd_vae.refresh_vae_list()
-    startup_timer.record("vae")
-
     shared.opts.onchange("sd_vae", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
-    # shared.opts.onchange("sd_vae_as_default", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
     shared.opts.onchange("temp_dir", ui_tempdir.on_tmpdir_changed)
     shared.opts.onchange("gradio_theme", shared.reload_gradio_theme)
-    startup_timer.record("opts onchange")
+    startup_timer.record("onchange")
 
     modules.textual_inversion.textual_inversion.list_textual_inversion_templates()
     shared.reload_hypernetworks()
+
     ui_extra_networks.intialize()
     ui_extra_networks.register_page(ui_extra_networks_hypernets.ExtraNetworksPageHypernetworks())
     ui_extra_networks.register_page(ui_extra_networks_checkpoints.ExtraNetworksPageCheckpoints())
     ui_extra_networks.register_page(ui_extra_networks_textual_inversion.ExtraNetworksPageTextualInversion())
     extra_networks.initialize()
     extra_networks.register_extra_network(extra_networks_hypernet.ExtraNetworkHypernet())
-    startup_timer.record("extra networks")
+    startup_timer.record("extra-networks")
 
     if cmd_opts.tls_keyfile is not None and cmd_opts.tls_keyfile is not None:
         try:
@@ -134,7 +137,7 @@ def initialize():
             log.error("TLS setup invalid, running webui without TLS")
         else:
             log.info("Running with TLS")
-        startup_timer.record("TLS")
+        startup_timer.record("tls")
 
     # make the program just exit at ctrl+c without waiting for anything
     def sigint_handler(_sig, _frame):
@@ -147,6 +150,8 @@ def initialize():
 def load_model():
     shared.state.begin()
     shared.state.job = 'load model'
+
+    """
     try:
         modules.sd_models.load_model()
         modules.sd_models.skip_next_load = True
@@ -154,32 +159,25 @@ def load_model():
         errors.display(e, "loading stable diffusion model")
         log.error("Stable diffusion model failed to load")
         exit(1)
+    """
+    Thread(target=lambda: shared.sd_model).start()
+
     if shared.sd_model is None:
-        log.error("No stable diffusion model loaded")
-        exit(1)
-    shared.opts.data["sd_model_checkpoint"] = shared.sd_model.sd_checkpoint_info.title
-    shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: modules.sd_models.reload_model_weights()))
+        log.warning("No stable diffusion model loaded")
+        # exit(1)
+    else:
+        shared.opts.data["sd_model_checkpoint"] = shared.sd_model.sd_checkpoint_info.title
+    shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: modules.sd_models.reload_model_weights()), call=False)
+
     shared.state.end()
     startup_timer.record("checkpoint")
 
 
 def create_api(app):
+    log.debug('Creating API')
     from modules.api.api import Api
     api = Api(app, queue_lock)
     return api
-
-
-def monkey_patch_docs():
-    def setup_with_docs(self):
-        self.docs_url = "/docs"
-        self.redoc_url = "/redoc"
-        self.setup_original()
-
-    from fastapi import FastAPI
-    setup_original = getattr(FastAPI, "setup_original", None)
-    if setup_original is None:
-        FastAPI.setup_original = FastAPI.setup
-    setattr(FastAPI, "setup", setup_with_docs)
 
 
 def async_policy():
@@ -197,19 +195,24 @@ def async_policy():
     asyncio.set_event_loop_policy(AnyThreadEventLoopPolicy())
 
 
-def start_ui():
-    log.debug('Entering StartUI')
+def start_common():
+    log.debug('Entering start sequence')
     logging.disable(logging.NOTSET if cmd_opts.debug else logging.DEBUG)
+    if shared.cmd_opts.data_dir is not None or len(shared.cmd_opts.data_dir) > 0:
+        log.info(f'Using data path: {shared.cmd_opts.data_dir}')
     create_paths(opts)
     async_policy()
     initialize()
     if shared.opts.clean_temp_dir_at_start:
         ui_tempdir.cleanup_tmpdr()
         startup_timer.record("cleanup")
+
+
+def start_ui():
+    log.debug('Creating UI')
     modules.script_callbacks.before_ui_callback()
     startup_timer.record("scripts before_ui_callback")
     shared.demo = modules.ui.create_ui()
-    monkey_patch_docs()
     startup_timer.record("ui")
     if cmd_opts.disable_queue:
         log.info('Server queues disabled')
@@ -220,11 +223,12 @@ def start_ui():
     gradio_auth_creds = []
     if cmd_opts.auth:
         gradio_auth_creds += [x.strip() for x in cmd_opts.auth.strip('"').replace('\n', '').split(',') if x.strip()]
-    if cmd_opts.authfile:
-        with open(cmd_opts.authfile, 'r', encoding="utf8") as file:
+    if cmd_opts.auth_file:
+        with open(cmd_opts.auth_file, 'r', encoding="utf8") as file:
             for line in file.readlines():
                 gradio_auth_creds += [x.strip() for x in line.split(',') if x.strip()]
 
+    import installer
     app, local_url, share_url = shared.demo.launch(
         share=cmd_opts.share,
         server_name=server_name,
@@ -239,6 +243,18 @@ def start_ui():
         max_threads=64,
         show_api=True,
         favicon_path='html/logo.ico',
+        app_kwargs={
+            "version": f'0.0.{installer.git_commit}',
+            "title": "SD.Next",
+            "description": "SD.Next",
+            "docs_url": "/docs",
+            "redocs_url": "/redocs",
+            "swagger_ui_parameters": {
+                "displayOperationId": True,
+                "showCommonExtensions": True,
+                "deepLinking": False,
+            },
+        }
     )
     shared.log.info(f'Local URL: {local_url}')
     shared.log.info(f'API Docs: {local_url[:-1]}/docs') # {local_url[:-1]}?view=api
@@ -248,8 +264,12 @@ def start_ui():
     shared.demo.server.wants_restart = False
     setup_middleware(app, cmd_opts)
 
+    if cmd_opts.subpath:
+        _mounted_app = gradio.mount_gradio_app(app, shared.demo, path=f"/{cmd_opts.subpath}")
+        shared.log.info(f'Redirector mounted: /{cmd_opts.subpath}')
+
     cmd_opts.autolaunch = False
-    startup_timer.record("start")
+    startup_timer.record("launch")
 
     modules.progress.setup_progress_api(app)
     create_api(app)
@@ -260,12 +280,27 @@ def start_ui():
 
 
 def webui():
-    log.debug('Entering WebUI')
+    start_common()
     start_ui()
     load_model()
     log.info(f"Startup time: {startup_timer.summary()}")
     return shared.demo.server
 
 
+def api_only():
+    start_common()
+    app = FastAPI()
+    setup_middleware(app, cmd_opts)
+    api = create_api(app)
+    api.wants_restart = False
+    modules.script_callbacks.app_started_callback(None, app)
+    log.info(f"Startup time: {startup_timer.summary()}")
+    api.launch(server_name="0.0.0.0" if cmd_opts.listen else "127.0.0.1", port=cmd_opts.port if cmd_opts.port else 7861)
+    return api
+
+
 if __name__ == "__main__":
-    webui()
+    if cmd_opts.api_only:
+        api_only()
+    else:
+        webui()

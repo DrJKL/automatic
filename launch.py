@@ -9,10 +9,11 @@ commandline_args = os.environ.get('COMMANDLINE_ARGS', "")
 sys.argv += shlex.split(commandline_args)
 
 import installer
-installer.add_args()
 installer.ensure_base_requirements()
-installer.extensions_preload(force=False)
+installer.add_args()
 installer.parse_args()
+installer.setup_logging(False)
+installer.extensions_preload(force=False)
 
 import modules.cmd_args
 args, _ = modules.cmd_args.parser.parse_known_args()
@@ -102,6 +103,10 @@ def get_memory_stats():
 
 
 def start_server(immediate=True, server=None):
+    if args.profile:
+        import cProfile
+        pr = cProfile.Profile()
+        pr.enable()
     import gc
     import importlib.util
     collected = 0
@@ -118,15 +123,18 @@ def start_server(immediate=True, server=None):
         installer.log.info("Test only")
         server.wants_restart = False
     else:
-        server = server.webui()
-    installer.log.info(f'Memory {get_memory_stats()}')
+        if args.api_only:
+            server = server.api_only()
+        else:
+            server = server.webui()
+    if args.profile:
+        installer.print_profile(pr, 'WebUI')
     return server
 
 
 if __name__ == "__main__":
     if args.version:
         installer.add_args()
-        installer.setup_logging(clean=False)
         installer.log.info('SD.Next version information')
         installer.check_python()
         installer.check_version()
@@ -144,7 +152,7 @@ if __name__ == "__main__":
             alive = instance.thread.is_alive()
         except:
             alive = False
-        if round(time.time()) % 30 == 0:
+        if round(time.time()) % 120 == 0:
             installer.log.debug(f'Server alive: {alive} Memory {get_memory_stats()}')
         if not alive:
             if instance.wants_restart:

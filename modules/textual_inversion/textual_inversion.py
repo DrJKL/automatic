@@ -3,7 +3,7 @@ import html
 import csv
 from collections import namedtuple
 import torch
-from tqdm.rich import tqdm
+from tqdm import tqdm
 import safetensors.torch
 import numpy as np
 from PIL import Image, PngImagePlugin
@@ -60,7 +60,7 @@ class Embedding:
                 'hash': self.checksum(),
                 'optimizer_state_dict': self.optimizer_state_dict,
             }
-            torch.save(optimizer_saved_dict, filename + '.optim')
+            torch.save(optimizer_saved_dict, f"{filename}.optim")
 
     def checksum(self):
         if self.cached_checksum is not None:
@@ -167,7 +167,10 @@ class EmbeddingDatabase:
             emb = next(iter(param_dict.items()))[1]
         # diffuser concepts
         elif type(data) == dict and type(next(iter(data.values()))) == torch.Tensor:
-            assert len(data.keys()) == 1, 'embedding file has multiple terms in it'
+            if len(data.keys()) != 1:
+                shared.log.warning(f"Embedding file has multiple terms in it: {filename}")
+                shared.log.warning(f"Skipping embedding: {filename}")
+                return
 
             emb = next(iter(data.values()))
             if len(emb.shape) == 1:
@@ -192,15 +195,12 @@ class EmbeddingDatabase:
     def load_from_dir(self, embdir):
         if not os.path.isdir(embdir.path):
             return
-
         for root, _dirs, fns in os.walk(embdir.path, followlinks=True):
             for fn in fns:
                 try:
                     fullfn = os.path.join(root, fn)
-
                     if os.stat(fullfn).st_size == 0:
                         continue
-
                     self.load_from_file(fullfn, fn)
                 except Exception as e:
                     errors.display(e, f'embedding load {fn}')
@@ -349,6 +349,7 @@ def validate_train_inputs(model_name, learn_rate, batch_size, gradient_step, dat
 
 def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_step, data_root, log_directory, training_width, training_height, varsize, steps, clip_grad_mode, clip_grad_value, shuffle_tags, tag_drop_out, latent_sampling_method, use_weight, create_image_every, save_embedding_every, template_filename, save_image_with_stored_embedding, preview_from_txt2img, preview_prompt, preview_negative_prompt, preview_steps, preview_sampler_index, preview_cfg_scale, preview_seed, preview_width, preview_height): # pylint: disable=unused-argument
 
+    shared.log.debug(f'train_embedding: embedding_name={embedding_name}|learn_rate={learn_rate}|batch_size={batch_size}|gradient_step={gradient_step}|data_root={data_root}|log_directory={log_directory}|training_width={training_width}|training_height={training_height}|varsize={varsize}|steps={steps}|clip_grad_mode={clip_grad_mode}|clip_grad_value={clip_grad_value}|shuffle_tags={shuffle_tags}|tag_drop_out={tag_drop_out}|latent_sampling_method={latent_sampling_method}|use_weight={use_weight}|create_image_every={create_image_every}|save_embedding_every={save_embedding_every}|template_filename={template_filename}|save_image_with_stored_embedding={save_image_with_stored_embedding}|preview_from_txt2img={preview_from_txt2img}|preview_prompt={preview_prompt}|preview_negative_prompt={preview_negative_prompt}|preview_steps={preview_steps}|preview_sampler_index={preview_sampler_index}|preview_cfg_scale={preview_cfg_scale}|preview_seed={preview_seed}|preview_width={preview_width}|preview_height={preview_height}')
     save_embedding_every = save_embedding_every or 0
     create_image_every = create_image_every or 0
     template_file = textual_inversion_templates.get(template_filename, None)
@@ -419,8 +420,8 @@ def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_st
     optimizer = torch.optim.AdamW([embedding.vec], lr=scheduler.learn_rate, weight_decay=0.0)
     if shared.opts.save_optimizer_state:
         optimizer_state_dict = None
-        if os.path.exists(filename + '.optim'):
-            optimizer_saved_dict = torch.load(filename + '.optim', map_location='cpu')
+        if os.path.exists(f"{filename}.optim"):
+            optimizer_saved_dict = torch.load(f"{filename}.optim", map_location='cpu')
             if embedding.checksum() == optimizer_saved_dict.get('hash', None):
                 optimizer_state_dict = optimizer_saved_dict.get('optimizer_state_dict', None)
         if optimizer_state_dict is not None:

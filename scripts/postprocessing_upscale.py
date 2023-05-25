@@ -16,7 +16,7 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
         selected_tab = gr.State(value=0) # pylint: disable=abstract-class-instantiated
 
         with gr.Column():
-            with FormRow():
+            with FormRow(elem_id="extras_upscale"):
                 with gr.Tabs(elem_id="extras_resize_mode"):
                     with gr.TabItem('Scale by', elem_id="extras_scale_by_tab") as tab_scale_by:
                         upscaling_resize = gr.Slider(minimum=1.0, maximum=8.0, step=0.05, label="Resize", value=4, elem_id="extras_upscaling_resize")
@@ -83,16 +83,17 @@ class ScriptPostprocessingUpscale(scripts_postprocessing.ScriptPostprocessing):
             upscaler_1_name = None
 
         upscaler1 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_1_name]), None)
-        assert upscaler1 or (upscaler_1_name is None), f'could not find upscaler named {upscaler_1_name}'
-
         if not upscaler1:
+            shared.log.warning(f"Could not find upscaler: {upscaler_1_name or '<empty string>'}")
             return
 
         if upscaler_2_name == "None":
             upscaler_2_name = None
 
         upscaler2 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_2_name and x.name != "None"]), None)
-        assert upscaler2 or (upscaler_2_name is None), f'could not find upscaler named {upscaler_2_name}'
+        if not upscaler2 and (upscaler_2_name is not None):
+            shared.log.warning(f"Could not find upscaler: {upscaler_2_name or '<empty string>'}")
+            return
 
         upscaled_image = self.upscale(pp.image, pp.info, upscaler1, upscale_mode, upscale_by, upscale_to_width, upscale_to_height, upscale_crop)
         pp.info["Postprocess upscaler"] = upscaler1.name
@@ -128,7 +129,8 @@ class ScriptPostprocessingUpscaleSimple(ScriptPostprocessingUpscale):
             return
 
         upscaler1 = next(iter([x for x in shared.sd_upscalers if x.name == upscaler_name]), None)
-        assert upscaler1, f'could not find upscaler named {upscaler_name}'
+        if upscaler1 is None:
+            shared.log.warning(f"Could not find upscaler: {upscaler_name or '<empty string>'}")
 
         pp.image = self.upscale(pp.image, pp.info, upscaler1, 0, upscale_by, 0, 0, False)
         pp.info["Postprocess upscaler"] = upscaler1.name

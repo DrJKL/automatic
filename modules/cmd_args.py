@@ -7,7 +7,8 @@ parser._optionals = parser.add_argument_group('Other options') # pylint: disable
 group = parser.add_argument_group('Server options')
 
 # main server args
-group.add_argument("--config", type=str, default=os.path.join(data_path, 'config.json'), help="Use specific configuration file, default: %(default)s")
+group.add_argument("--config", type=str, default=os.path.join(data_path, 'config.json'), help="Use specific server configuration file, default: %(default)s")
+group.add_argument("--ui-config", type=str, default=os.path.join(data_path, 'ui-config.json'), help="Use specific UI configuration file, default: %(default)s")
 group.add_argument("--medvram", action='store_true', help="Split model stages and keep only active part in VRAM, default: %(default)s")
 group.add_argument("--lowvram", action='store_true', help="Split model components and keep only active part in VRAM, default: %(default)s")
 group.add_argument("--ckpt", type=str, default=None, help="Path to model checkpoint to load immediately, default: %(default)s")
@@ -22,9 +23,9 @@ group.add_argument("--listen", action='store_true', help="Launch web server usin
 group.add_argument("--port", type=int, default=7860, help="Launch web server with given server port, default: %(default)s")
 group.add_argument("--freeze", action='store_true', help="Disable editing settings", default=False)
 group.add_argument("--auth", type=str, help='Set access authentication like "user:pwd,user:pwd""', default=None)
-group.add_argument("--authfile", type=str, help='Set access authentication using file, default: %(default)s', default=None)
+group.add_argument("--auth-file", type=str, help='Set access authentication using file, default: %(default)s', default=None)
 group.add_argument("--autolaunch", action='store_true', help="Open the UI URL in the system's default browser upon launch", default=False)
-group.add_argument("--api-auth", type=str, help='Set API authentication, default: %(default)s', default=None)
+group.add_argument('--api-only', default = False, action='store_true', help = "Run in API only mode without starting UI")
 group.add_argument("--api-log", default=False, action='store_true', help="Enable logging of all API requests, default: %(default)s")
 group.add_argument("--device-id", type=str, help="Select the default CUDA device to use, default: %(default)s", default=None)
 group.add_argument("--cors-origins", type=str, help="Allowed CORS origins as comma-separated list, default: %(default)s", default=None)
@@ -38,7 +39,11 @@ group.add_argument("--no-download", action='store_true', help="Disable download 
 group.add_argument("--profile", action='store_true', help="Run profiler, default: %(default)s")
 group.add_argument("--disable-queue", action='store_true', help="Disable queues, default: %(default)s")
 group.add_argument('--debug', default = False, action='store_true', help = "Run installer with debug logging, default: %(default)s")
-group.add_argument("--use-ipex", action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s", default=False)
+group.add_argument("--use-ipex", default = False, action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s")
+group.add_argument('--use-directml', default = False, action='store_true', help = "Use DirectML if no compatible GPU is detected, default: %(default)s")
+group.add_argument("--use-cuda", default=False, action='store_true', help="Force use nVidia CUDA backend, default: %(default)s")
+group.add_argument("--use-rocm", default=False, action='store_true', help="Force use AMD ROCm backend, default: %(default)s")
+group.add_argument('--subpath', type=str, help='Customize the URL subpath for usage with reverse proxy')
 
 # removed args are added here as hidden in fixed format for compatbility reasons
 group.add_argument("-f", action='store_true', help=argparse.SUPPRESS)  # allows running as root; implemented outside of webui
@@ -51,6 +56,7 @@ group.add_argument("--disable-safe-unpickle", action='store_true', help=argparse
 group.add_argument("--lowram", action='store_true', help=argparse.SUPPRESS)
 group.add_argument("--disable-extension-access", default = False, action='store_true', help=argparse.SUPPRESS)
 group.add_argument("--api", help=argparse.SUPPRESS, default=True)
+group.add_argument("--api-auth", type=str, help=argparse.SUPPRESS, default=None)
 
 
 def compatibility_args(opts, args):
@@ -82,6 +88,8 @@ def compatibility_args(opts, args):
     group.add_argument("--sub-quad-chunk-threshold", help=argparse.SUPPRESS, default=opts.sub_quad_chunk_threshold)
     group.add_argument("--lora-dir", help=argparse.SUPPRESS, default=opts.lora_dir)
     group.add_argument("--lyco-dir", help=argparse.SUPPRESS, default=opts.lyco_dir)
+    group.add_argument("--enable-console-prompts", help=argparse.SUPPRESS, action='store_true', default=False)
+    group.add_argument("--safe", help=argparse.SUPPRESS, action='store_true', default=False)
 
     # removed opts are added here with fixed values for compatibility reasons
     opts.use_old_emphasis_implementation = False
@@ -100,7 +108,8 @@ def compatibility_args(opts, args):
     opts.multiple_tqdm = False
     opts.print_hypernet_extra = False
     opts.dimensions_and_batch_together = True
+    opts.enable_pnginfo = True
+    opts.data['clip_skip'] = 1
 
     args = parser.parse_args()
-
     return args

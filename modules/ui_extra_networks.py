@@ -1,6 +1,5 @@
 import json
 import html
-import glob
 import os.path
 import urllib.parse
 from pathlib import Path
@@ -63,7 +62,9 @@ class ExtraNetworksPage:
         pass
 
     def link_preview(self, filename):
-        return "./sd_extra_networks/thumb?filename=" + urllib.parse.quote(filename.replace('\\', '/')) + "&mtime=" + str(os.path.getmtime(filename))
+        quoted_filename = urllib.parse.quote(filename.replace('\\', '/'))
+        mtime = os.path.getmtime(filename)
+        return f"./sd_extra_networks/thumb?filename={quoted_filename}&mtime={mtime}"
 
     def search_terms_from_path(self, filename, possible_directories=None):
         abspath = os.path.abspath(filename)
@@ -78,17 +79,20 @@ class ExtraNetworksPage:
         items_html = ''
         self.metadata = {}
         subdirs = {}
-        for parentdir in [os.path.abspath(x) for x in self.allowed_directories_for_previews()]:
-            for x in glob.glob(os.path.join(parentdir, '**/*'), recursive=True):
-                if not os.path.isdir(x):
-                    continue
-                subdir = os.path.abspath(x)[len(parentdir):].replace("\\", "/")
-                while subdir.startswith("/"):
-                    subdir = subdir[1:]
-                is_empty = len(os.listdir(x)) == 0
-                if not is_empty and not subdir.endswith("/"):
-                    subdir = subdir + "/"
-                subdirs[subdir] = 1
+        allowed_folders = [os.path.abspath(x) for x in self.allowed_directories_for_previews()]
+        for parentdir in [*set(allowed_folders)]:
+            for root, dirs, _files in os.walk(parentdir, followlinks=True):
+                for dirname in dirs:
+                    x = os.path.join(root, dirname)
+                    if not os.path.isdir(x):
+                        continue
+                    subdir = os.path.abspath(x)[len(parentdir):].replace("\\", "/")
+                    while subdir.startswith("/"):
+                        subdir = subdir[1:]
+                    is_empty = len(os.listdir(x)) == 0
+                    if not is_empty and not subdir.endswith("/"):
+                        subdir = subdir + "/"
+                    subdirs[subdir] = 1
         if subdirs:
             subdirs = {"": 1, **subdirs}
         subdirs_html = "".join([f"""
@@ -139,7 +143,7 @@ class ExtraNetworksPage:
             "card_clicked": onclick,
             "save_card_description": '"' + html.escape(f"""return saveCardDescription(event, {json.dumps(tabname)}, {json.dumps(item["local_preview"])})""") + '"',
             "save_card_preview": '"' + html.escape(f"""return saveCardPreview(event, {json.dumps(tabname)}, {json.dumps(item["local_preview"])})""") + '"',
-            "read_card_description": '"' + html.escape(f"""return readCardDescription(event, {json.dumps(tabname)}, {json.dumps(item["local_preview"])}, {json.dumps(item["description"])}, {json.dumps(self.name)}, {json.dumps(item["name"])})""") + '"',
+            "read_card_description": '"' + html.escape(f"""return readCardDescription(event, {json.dumps(tabname)}, {json.dumps(item["local_preview"])}, {json.dumps(item.get("description", ""))}, {json.dumps(self.name)}, {json.dumps(item["name"])})""") + '"',
             "search_term": item.get("search_term", ""),
             "read_card_metadata": '"' + html.escape(f"""return readCardMetadata(event, {json.dumps(self.name)}, {json.dumps(item["name"])})""") + '"',
         }
@@ -181,7 +185,7 @@ def intialize():
 class ExtraNetworksUi:
     def __init__(self):
         self.pages = None
-        self.stored_extra_pages = None
+        self.stored_extra_pages = []
         self.button_save_preview = None
         self.preview_target_filename = None
         self.button_save_description = None
@@ -189,6 +193,7 @@ class ExtraNetworksUi:
         self.description_target_filename = None
         self.description_input = None
         self.tabname = None
+        self.search = None
 
 
 def pages_in_preferred_order(pages):
@@ -212,8 +217,9 @@ def create_ui(container, button, tabname):
         for page in ui.stored_extra_pages:
             with gr.Tab(page.title, id=page.title.lower().replace(" ", "_")):
                 page_elem = gr.HTML(page.create_html(ui.tabname))
+                page_elem.change(fn=lambda: None, _js=f'() => refreshExtraNetworks("{tabname}")', inputs=[], outputs=[])
                 ui.pages.append(page_elem)
-    _filter = gr.Textbox('', show_label=False, elem_id=tabname+"_extra_search", placeholder="Search...", visible=False)
+    ui.search = gr.Textbox('', show_label=False, elem_id=tabname+"_extra_search", placeholder="Search...", visible=False)
     ui.description_input = gr.TextArea('', show_label=False, elem_id=tabname+"_description_input", placeholder="Save/Replace Extra Network Description...", lines=2)
     button_refresh = ToolButton(refresh_symbol, elem_id=tabname+"_extra_refresh")
     button_close = ToolButton(close_symbol, elem_id=tabname+"_extra_close")
@@ -236,6 +242,7 @@ def create_ui(container, button, tabname):
         for pg in ui.stored_extra_pages:
             pg.refresh()
             res.append(pg.create_html(ui.tabname))
+        ui.search.update(value = ui.search.value)
         return res
 
     button_refresh.click(fn=refresh, inputs=[], outputs=ui.pages)

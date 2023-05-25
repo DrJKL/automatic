@@ -13,9 +13,6 @@ import piexif
 import piexif.helper
 import uvicorn
 import gradio as gr
-# from gradio.processing_utils import decode_base64_to_file # gradio 3.23
-# from gradio_client.utils import decode_base64_to_file # gradio 3.28
-
 from modules import errors, shared, sd_samplers, deepbooru, sd_hijack, images, scripts, ui, postprocessing
 from modules.api.models import * # pylint: disable=unused-wildcard-import, wildcard-import
 from modules.processing import StableDiffusionProcessingTxt2Img, StableDiffusionProcessingImg2Img, process_images
@@ -33,7 +30,7 @@ def upscaler_to_index(name: str):
     try:
         return [x.name.lower() for x in shared.sd_upscalers].index(name.lower())
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid upscaler, needs to be one of these: {' , '.join([x.name for x in sd_upscalers])}") from e
+        raise HTTPException(status_code=400, detail=f"Invalid upscaler, needs to be one of these: {' , '.join([x.name for x in shared.sd_upscalers])}") from e
 
 def script_name_to_index(name, scripts_list):
     try:
@@ -60,28 +57,29 @@ def decode_base64_to_image(encoding):
         image = Image.open(BytesIO(base64.b64decode(encoding)))
         return image
     except Exception as e:
+        shared.log.warning(f'API cannot decode image: {e}')
         raise HTTPException(status_code=500, detail="Invalid encoded image") from e
 
 def encode_pil_to_base64(image):
     with io.BytesIO() as output_bytes:
-        if opts.samples_format.lower() == 'png':
+        if shared.opts.samples_format.lower() == 'png':
             use_metadata = False
             encoded_metadata = PngImagePlugin.PngInfo()
             for k, v in image.info.items():
                 if isinstance(k, str) and isinstance(v, str):
                     encoded_metadata.add_text(k, v)
                     use_metadata = True
-            image.save(output_bytes, format="PNG", pnginfo=(encoded_metadata if use_metadata else None), quality=opts.jpeg_quality)
+            image.save(output_bytes, format="PNG", pnginfo=(encoded_metadata if use_metadata else None), quality=shared.opts.jpeg_quality)
 
-        elif opts.samples_format.lower() in ("jpg", "jpeg", "webp"):
+        elif shared.opts.samples_format.lower() in ("jpg", "jpeg", "webp"):
             parameters = image.info.get('parameters', None)
             exif_bytes = piexif.dump({
                 "Exif": { piexif.ExifIFD.UserComment: piexif.helper.UserComment.dump(parameters or "", encoding="unicode") }
             })
-            if opts.samples_format.lower() in ("jpg", "jpeg"):
-                image.save(output_bytes, format="JPEG", exif = exif_bytes, quality=opts.jpeg_quality)
+            if shared.opts.samples_format.lower() in ("jpg", "jpeg"):
+                image.save(output_bytes, format="JPEG", exif = exif_bytes, quality=shared.opts.jpeg_quality)
             else:
-                image.save(output_bytes, format="WEBP", exif = exif_bytes, quality=opts.jpeg_quality)
+                image.save(output_bytes, format="WEBP", exif = exif_bytes, quality=shared.opts.jpeg_quality)
         else:
             raise HTTPException(status_code=500, detail="Invalid image format")
         bytes_data = output_bytes.getvalue()
@@ -90,11 +88,17 @@ def encode_pil_to_base64(image):
 
 class Api:
     def __init__(self, app: FastAPI, queue_lock: Lock):
-        if shared.cmd_opts.api_auth:
-            self.credentials = dict()
-            for auth in shared.cmd_opts.api_auth.split(","):
+        self.credentials = dict()
+        if shared.cmd_opts.auth:
+            for auth in shared.cmd_opts.auth.split(","):
                 user, password = auth.split(":")
-                self.credentials[user] = password
+                self.credentials[user.replace('"', '').strip()] = password.replace('"', '').strip()
+        if shared.cmd_opts.auth_file:
+            with open(shared.cmd_opts.auth_file, 'r', encoding="utf8") as file:
+                for line in file.readlines():
+                    user, password = line.split(":")
+                    self.credentials[user.replace('"', '').strip()] = password.replace('"', '').strip()
+
         self.router = APIRouter()
         self.app = app
         self.queue_lock = queue_lock
@@ -133,7 +137,7 @@ class Api:
         self.default_script_arg_img2img = []
 
     def add_api_route(self, path: str, endpoint, **kwargs):
-        if shared.cmd_opts.api_auth:
+        if shared.cmd_opts.auth or shared.cmd_opts.auth_file:
             return self.app.add_api_route(path, endpoint, dependencies=[Depends(self.auth)], **kwargs)
         return self.app.add_api_route(path, endpoint, **kwargs)
 
@@ -141,7 +145,7 @@ class Api:
         if credentials.username in self.credentials:
             if compare_digest(credentials.password, self.credentials[credentials.username]):
                 return True
-        raise HTTPException(status_code=401, detail="Incorrect username or password", headers={"WWW-Authenticate": "Basic"})
+        raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Basic"})
 
     def get_selectable_script(self, script_name, script_runner):
         if script_name is None or script_name == "":
@@ -185,7 +189,6 @@ class Api:
         script_args = default_script_args.copy()
         # position 0 in script_arg is the idx+1 of the selectable script that is going to be run when using scripts.scripts_*2img.run()
         if selectable_scripts:
-            # TODO this can corrupt values for other scripts
             script_args[selectable_scripts.args_from:selectable_scripts.args_to] = request.script_args
             script_args[0] = selectable_script_idx + 1
         # Now check for always on scripts
@@ -197,7 +200,6 @@ class Api:
                 if not alwayson_script.alwayson:
                     raise HTTPException(status_code=422, detail=f"Selectable script cannot be in always on params: {alwayson_script_name}")
                 if "args" in request.alwayson_scripts[alwayson_script_name]:
-                    # TODO this can corrupt values for other scripts
                     # min between arg length in scriptrunner and arg length in the request
                     for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(request.alwayson_scripts[alwayson_script_name]["args"]))):
                         script_args[alwayson_script.args_from + idx] = request.alwayson_scripts[alwayson_script_name]["args"][idx]
@@ -230,8 +232,8 @@ class Api:
         with self.queue_lock:
             p = StableDiffusionProcessingTxt2Img(sd_model=shared.sd_model, **args)
             p.scripts = script_runner
-            p.outpath_grids = opts.outdir_grids or opts.outdir_txt2img_grids
-            p.outpath_samples = opts.outdir_samples or opts.outdir_txt2img_samples
+            p.outpath_grids = shared.opts.outdir_grids or shared.opts.outdir_txt2img_grids
+            p.outpath_samples = shared.opts.outdir_samples or shared.opts.outdir_txt2img_samples
             shared.state.begin()
             script_args = self.init_script_args(p, txt2imgreq, self.default_script_arg_txt2img, selectable_scripts, selectable_script_idx, script_runner)
             if selectable_scripts is not None:
@@ -278,8 +280,8 @@ class Api:
             p = StableDiffusionProcessingImg2Img(sd_model=shared.sd_model, **args)
             p.init_images = [decode_base64_to_image(x) for x in init_images]
             p.scripts = script_runner
-            p.outpath_grids = opts.outdir_img2img_grids
-            p.outpath_samples = opts.outdir_img2img_samples
+            p.outpath_grids = shared.opts.outdir_img2img_grids
+            p.outpath_samples = shared.opts.outdir_img2img_samples
             shared.state.begin()
             script_args = self.init_script_args(p, img2imgreq, self.default_script_arg_img2img, selectable_scripts, selectable_script_idx, script_runner)
             if selectable_scripts is not None:
@@ -297,12 +299,9 @@ class Api:
 
     def extras_single_image_api(self, req: ExtrasSingleImageRequest):
         reqDict = setUpscalers(req)
-
         reqDict['image'] = decode_base64_to_image(reqDict['image'])
-
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=0, image_folder="", input_dir="", output_dir="", save_output=False, **reqDict)
-
         return ExtrasSingleImageResponse(image=encode_pil_to_base64(result[0][0]), html_info=result[1])
 
     def extras_batch_images_api(self, req: ExtrasBatchImagesRequest):
@@ -404,13 +403,15 @@ class Api:
                 options.update({k: shared.opts.data.get(k, shared.opts.data_labels.get(k).default)})
             else:
                 options.update({k: shared.opts.data.get(k, None)})
-
+        if 'sd_lyco' in options:
+            del options['sd_lyco']
+        if 'sd_lora' in options:
+            del options['sd_lora']
         return options
 
     def set_config(self, req: Dict[str, Any]):
         for k, v in req.items():
             shared.opts.set(k, v)
-
         shared.opts.save(shared.config_filename)
         return
 
@@ -579,7 +580,7 @@ class Api:
             ram = { 'error': f'{err}' }
         try:
             import torch
-            if shared.cmd_opts.use_ipex():
+            if shared.cmd_opts.use_ipex:
                 system = { 'free': (torch.xpu.get_device_properties("xpu").total_memory - torch.xpu.memory_allocated()), 'used': torch.xpu.memory_allocated(), 'total': torch.xpu.get_device_properties("xpu").total_memory }
                 s = dict(torch.xpu.memory_stats("xpu"))
                 allocated = { 'current': s['allocated_bytes.all.current'], 'peak': s['allocated_bytes.all.peak'] }
@@ -620,4 +621,5 @@ class Api:
 
     def launch(self, server_name, port):
         self.app.include_router(self.router)
+        server_name = "0.0.0.0" if shared.cmd_opts.listen else None
         uvicorn.run(self.app, host=server_name, port=port)

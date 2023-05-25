@@ -4,6 +4,8 @@ import sys
 from collections import namedtuple
 import gradio as gr
 from modules import paths, script_callbacks, extensions, script_loading, scripts_postprocessing, errors
+from installer import log
+
 
 AlwaysVisible = object()
 
@@ -140,7 +142,8 @@ class Script:
     def elem_id(self, item_id):
         """helper function to generate id for a HTML element, constructs final id out of script name, tab and user-supplied item_id"""
         need_tabname = self.show(True) == self.show(False)
-        tabname = ('img2img' if self.is_img2img else 'txt2txt') + "_" if need_tabname else ""
+        tabkind = 'img2img' if self.is_img2img else 'txt2txt'
+        tabname = f"{tabkind}_" if need_tabname else ""
         title = re.sub(r'[^a-z_0-9]', '', re.sub(r'\s', '_', self.title().lower()))
         return f'script_{tabname}{title}_{item_id}'
 
@@ -256,6 +259,7 @@ class ScriptRunner:
         self.infotext_fields = []
         self.paste_field_names = []
         self.script_load_ctr = 0
+        self.is_img2img = False
 
     def initialize_scripts(self, is_img2img):
         from modules import scripts_auto_postprocessing
@@ -267,6 +271,7 @@ class ScriptRunner:
         self.infotext_fields.clear()
         self.paste_field_names.clear()
         self.script_load_ctr = 0
+        self.is_img2img = is_img2img
 
         self.scripts.clear()
         self.alwayson_scripts.clear()
@@ -308,11 +313,13 @@ class ScriptRunner:
             inputs_alwayson += [script.alwayson for _ in controls]
             script.args_to = len(inputs)
 
-        for script in self.alwayson_scripts:
-            with gr.Group() as group:
-                create_script_ui(script, inputs, inputs_alwayson)
+        with gr.Group(elem_id='scripts_alwayson_img2img' if self.is_img2img else 'scripts_alwayson_txt2img'):
+            for script in self.alwayson_scripts:
+                elem_id = f'script_{"txt2img" if script.is_txt2img else "img2img"}_{script.title().lower().replace(" ", "_")}'
+                with gr.Group(elem_id=elem_id) as group:
+                    create_script_ui(script, inputs, inputs_alwayson)
+                script.group = group
 
-            script.group = group
         dropdown = gr.Dropdown(label="Script", elem_id="script_list", choices=["None"] + self.titles, value="None", type="index")
         inputs[0] = dropdown
         for script in self.selectable_scripts:
@@ -356,18 +363,23 @@ class ScriptRunner:
         if script is None:
             return None
         parsed = p.per_script_args.get(script.title(), args[script.args_from:script.args_to])
+        log.debug(f'Script run: {script.title()}')
         processed = script.run(p, *parsed)
         return processed
 
     def process(self, p, **kwargs):
+        log.debug(f'Script process: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
+                # log.debug(f'Script process start: {script.title()}')
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
                 script.process(p, *args, **kwargs)
+                # log.debug(f'Script process end  : {script.title()}')
             except Exception as e:
                 errors.display(e, f'Running script process: {script.filename}')
 
     def before_process_batch(self, p, **kwargs):
+        log.debug(f'Script before-process-batch: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
@@ -376,6 +388,7 @@ class ScriptRunner:
                 errors.display(e, f'Running script before process batch: {script.filename}')
 
     def process_batch(self, p, **kwargs):
+        log.debug(f'Script process-batch: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
@@ -384,6 +397,7 @@ class ScriptRunner:
                 errors.display(e, f'Running script process batch: {script.filename}')
 
     def postprocess(self, p, processed):
+        log.debug(f'Script postprocess: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
@@ -392,6 +406,7 @@ class ScriptRunner:
                 errors.display(e, f'Running script postprocess: {script.filename}')
 
     def postprocess_batch(self, p, images, **kwargs):
+        log.debug(f'Script postprocess-batch: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
@@ -400,6 +415,7 @@ class ScriptRunner:
                 errors.display(e, f'Running script before postprocess batch: {script.filename}')
 
     def postprocess_image(self, p, pp: PostprocessImageArgs):
+        log.debug(f'Script postprocess-image: {[s.title() for s in self.alwayson_scripts]}')
         for script in self.alwayson_scripts:
             try:
                 args = p.per_script_args.get(script.title(), p.script_args[script.args_from:script.args_to])
@@ -466,7 +482,7 @@ def add_classes_to_gradio_component(comp):
         elem_classes = comp.elem_classes
     if elem_classes is None:
         elem_classes = []
-    comp.elem_classes = ["gradio-" + comp.get_block_name(), *(elem_classes)]
+    comp.elem_classes = [f"gradio-{comp.get_block_name()}", *(comp.elem_classes or [])]
     if getattr(comp, 'multiselect', False):
         comp.elem_classes.append('multiselect')
 

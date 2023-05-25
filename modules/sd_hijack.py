@@ -175,7 +175,9 @@ class StableDiffusionModelHijack:
 
         if opts.cuda_compile and opts.cuda_compile_mode != 'none':
             try:
+                import logging
                 import torch._dynamo as dynamo # pylint: disable=unused-import
+                torch._dynamo.config.log_level = logging.WARNING if opts.cuda_compile_verbose else logging.CRITICAL # pylint: disable=protected-access
                 torch._dynamo.config.verbose = opts.cuda_compile_verbose # pylint: disable=protected-access
                 torch._dynamo.config.suppress_errors = opts.cuda_compile_errors # pylint: disable=protected-access
                 torch.backends.cudnn.benchmark = True
@@ -235,8 +237,9 @@ class StableDiffusionModelHijack:
         self.comments = []
 
     def get_prompt_lengths(self, text):
+        if self.clip is None:
+            return 0, 0
         _, token_count = self.clip.process_texts([text])
-
         return token_count, self.clip.get_target_prompt_token_count(token_count)
 
 

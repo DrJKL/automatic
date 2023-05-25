@@ -4,39 +4,31 @@
 
 Stuff to be fixed...
 
-- Move Restart Server from WebUI to Launch and reload modules
-- Mdularize `cli` scripts
 
 ## Features
 
 Stuff to be added...
 
 - Update `README.md`
-- Add Gradio theme maker
-- Create new GitHub hooks/actions for CI/CD  
-- Redo Extensions tab: <https://vladmandic.github.io/sd-extension-manager/pages/extensions.html>
-- Stream-load models as option for slow storage
-- Auto-test `torch.layer_norm` for FP16
-- Monitor file changes by misbehaving extensions
-- Kitchen theme: <https://github.com/canisminor1990/sd-webui-kitchen-theme>
-- Lightbox improvements
-- Check duplicate extensions
+- Update `Wiki`
+- Add `Gradio` theme maker
+- Create new `GitHub` hooks/actions for CI/CD  
+- Monitor file changes for misbehaving extensions
 - Reload browser on server restart
+- Remove origin wiki
+- Import core repos
+- Improve core `Stability-AI` code: <https://github.com/vladmandic/automatic/discussions/795>
+- Improve core `k-Diffusion` code
 
 ## Investigate
 
 Stuff to be investigated...
 
-- Torch Compile
-- `Torch-DirectML`
-- `TensorRT`
-- [Temporal Weighing](https://github.com/comfyanonymous/ComfyUI/discussions/473)
-
 ## Merge PRs
 
 Pick & merge PRs from main repo...
 
-- Merge backlog: <https://github.com/vladmandic/automatic/compare/master...AUTOMATIC1111:stable-diffusion-webui:master>
+- Compare commits: <https://github.com/vladmandic/automatic/compare/e59ebe25..b6289d5>
 
 ## Models
 
@@ -54,10 +46,9 @@ Tech that can be integrated as part of the core workflow...
 - [Null-text inversion](https://github.com/ouhenio/null-text-inversion-colab)
 - [Custom diffusion](https://github.com/guaneec/custom-diffusion-webui), [Custom diffusion](https://www.cs.cmu.edu/~custom-diffusion/)
 - [Dream artist](https://github.com/7eu7d7/DreamArtist-sd-webui-extension)
+- [QuickEmbedding](https://github.com/ethansmith2000/QuickEmbedding)
+- `TensorRT`
 
 ## Random
 
 - Bunch of stuff: <https://pharmapsychotic.com/tools.html>
-
-### Pending Code Updates
-

@@ -206,7 +206,7 @@ class TorchHijack:
         if hasattr(torch, item):
             return getattr(torch, item)
 
-        raise AttributeError("'{}' object has no attribute '{}'".format(type(self).__name__, item))
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{item}'")
 
     def randn_like(self, x):
         if self.sampler_noises:
@@ -308,7 +308,15 @@ class KDiffusionSampler:
 
     def create_noise_sampler(self, x, sigmas, p):
         from k_diffusion.sampling import BrownianTreeNoiseSampler
-        sigma_min, sigma_max = sigmas[sigmas > 0].min(), sigmas.max()
+
+        positive_sigmas = sigmas[sigmas > 0]
+
+        if positive_sigmas.numel() > 0:
+            sigma_min = positive_sigmas.min(dim=0)[0]
+        else:
+            sigma_min = 0
+
+        sigma_max = sigmas.max()
         current_iter_seeds = p.all_seeds[p.iteration * p.batch_size:(p.iteration + 1) * p.batch_size]
         return BrownianTreeNoiseSampler(x, sigma_min, sigma_max, seed=current_iter_seeds)
 
