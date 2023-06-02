@@ -12,7 +12,8 @@ Stuff to be added...
 - Update `Wiki`
 - Create new `GitHub` hooks/actions for CI/CD  
 - Import core repos
-- Improve core `Stability-AI` code: <https://github.com/vladmandic/automatic/discussions/795>
+- Update `train.py` to use `interrogator`
+- Update `train.py` to use `rembg`
 
 ## Investigate
 
@@ -48,3 +49,6 @@ Tech that can be integrated as part of the core workflow...
 - Bunch of stuff: <https://pharmapsychotic.com/tools.html>
 - <https://towardsdatascience.com/mastering-memoization-in-python-dcdd8b435189>
 - <https://github.com/AUTOMATIC1111/stable-diffusion-webui/compare/89f9faa...20ae71f>
+- <https://github.com/vladmandic/automatic/discussions/1246>
+- shared.info
+- hints
