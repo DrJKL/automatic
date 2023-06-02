@@ -203,13 +203,16 @@ def update(folder):
 # clone git repository
 def clone(url, folder, commithash=None):
     if os.path.exists(folder):
+        if args.skip_update:
+            return
         if commithash is None:
-            return
-        current_hash = git('rev-parse HEAD', folder).strip()
-        if current_hash != commithash:
-            git('fetch', folder)
-            git(f'checkout {commithash}', folder)
-            return
+            update(folder)
+        else:
+            current_hash = git('rev-parse HEAD', folder).strip()
+            if current_hash != commithash:
+                git('fetch', folder)
+                git(f'checkout {commithash}', folder)
+                return
     else:
         log.info(f'Cloning repository: {url}')
         git(f'clone "{url}" "{folder}"')
@@ -292,7 +295,8 @@ def check_torch():
                 import intel_extension_for_pytorch as ipex # pylint: disable=import-error, unused-import
                 log.info(f'Torch backend: Intel IPEX {ipex.__version__}')
                 log.info(f'{os.popen("icpx --version").read().rstrip()}')
-                log.info(f'Torch detected GPU: {torch.xpu.get_device_name("xpu")} VRAM {round(torch.xpu.get_device_properties("xpu").total_memory / 1024 / 1024)}')
+                for device in [torch.xpu.device(i) for i in range(torch.xpu.device_count())]:
+                    log.info(f'Torch detected GPU: {torch.xpu.get_device_name(device)} VRAM {round(torch.xpu.get_device_properties(device).total_memory / 1024 / 1024)}')
             elif torch.cuda.is_available() and (allow_cuda or allow_rocm):
                 # log.debug(f'Torch allocator: {torch.cuda.get_allocator_backend()}')
                 if torch.version.cuda and allow_cuda:

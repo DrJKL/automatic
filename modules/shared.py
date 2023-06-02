@@ -237,10 +237,11 @@ def list_samplers():
     return modules.sd_samplers.all_samplers
 
 def list_themes():
-    if not os.path.exists(os.path.join('javascript', 'themes.json')):
+    fn = os.path.join('html', 'themes.json')
+    if not os.path.exists(fn):
         refresh_themes()
-    if os.path.exists(os.path.join('javascript', 'themes.json')):
-        with open(os.path.join('javascript', 'themes.json'), mode='r', encoding='utf=8') as f:
+    if os.path.exists(fn):
+        with open(fn, mode='r', encoding='utf=8') as f:
             res = json.loads(f.read())
     else:
         res = []
@@ -254,7 +255,8 @@ def refresh_themes():
         req = requests.get('https://huggingface.co/datasets/freddyaboulton/gradio-theme-subdomains/resolve/main/subdomains.json', timeout=5)
         if req.status_code == 200:
             res = req.json()
-            with open(os.path.join('javascript', 'themes.json'), mode='w', encoding='utf=8') as f:
+            fn = os.path.join('html', 'themes.json')
+            with open(fn, mode='w', encoding='utf=8') as f:
                 f.write(json.dumps(res))
         else:
             log.error('Error refreshing UI themes')
@@ -319,11 +321,11 @@ options_templates.update(options_section(('system-paths', "System Paths"), {
 
 options_templates.update(options_section(('saving-images', "Image Options"), {
     "samples_save": OptionInfo(True, "Always save all generated images"),
-    "samples_format": OptionInfo('jpg', 'File format for images'),
+    "samples_format": OptionInfo('jpg', 'File format for generated images', gr.Dropdown, lambda: {"choices": ["jpg", "png", "webp", "tiff", "jp2", "psd"]}),
     "samples_filename_pattern": OptionInfo("[seed]-[prompt_spaces]", "Images filename pattern", component_args=hide_dirs),
     "save_images_add_number": OptionInfo(True, "Add number to filename when saving", component_args=hide_dirs),
     "grid_save": OptionInfo(True, "Always save all generated image grids"),
-    "grid_format": OptionInfo('jpg', 'File format for grids'),
+    "grid_format": OptionInfo('jpg', 'File format for grids', gr.Dropdown, lambda: {"choices": ["jpg", "png", "webp", "tiff", "jp2", "psd"]}),
     "grid_extended_filename": OptionInfo(True, "Add extended info (seed, prompt) to filename when saving grid"),
     "grid_only_if_multiple": OptionInfo(True, "Do not save grids consisting of one picture"),
     "grid_prevent_empty_spots": OptionInfo(True, "Prevent empty spots in grid (when set to autodetect)"),
