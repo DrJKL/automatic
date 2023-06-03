@@ -127,7 +127,7 @@ def set_cuda_params():
         dtype = torch.float16
         dtype_vae = torch.float16
         dtype_unet = torch.float16
-    if shared.opts.cuda_dtype == 'BP16' and ok:
+    if shared.opts.cuda_dtype == 'BF16' and ok:
         dtype = torch.bfloat16
         dtype_vae = torch.bfloat16
         dtype_unet = torch.bfloat16
@@ -148,7 +148,7 @@ if args.use_ipex:
     if args.device_id is not None:
         cpu = torch.device(f"xpu:{args.device_id}") #Use XPU instead of CPU. %20 Perf improvement on weak CPUs.
     else:
-        cpu = torch.device("xpu") 
+        cpu = torch.device("xpu")
 else:
     cpu = torch.device("cpu")
 device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
@@ -202,7 +202,7 @@ def autocast(disable=False):
     if shared.cmd_opts.use_directml:
         return torch.dml.amp.autocast(dtype)
     if shared.cmd_opts.use_ipex:
-        return torch.xpu.amp.autocast(enabled=True, dtype=dtype, cache_enabled=False)
+        return torch.xpu.amp.autocast(enabled=True, dtype=dtype)
     if cuda_ok:
         return torch.autocast("cuda")
     else:

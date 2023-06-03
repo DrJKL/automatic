@@ -70,6 +70,10 @@ function setProgress(res) {
   }
 }
 
+function requestInterrupt() {
+  setProgress();
+}
+
 function randomId() {
   return `task(${Math.random().toString(36).slice(2, 7)}${Math.random().toString(36).slice(2, 7)}${Math.random().toString(36).slice(2, 7)})`;
 }
