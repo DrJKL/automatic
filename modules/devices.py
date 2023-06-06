@@ -103,8 +103,9 @@ def test_bf16():
         return True
     try:
         import torch.nn.functional as F
-        image = torch.randn(1, 4, 32, 32).to(device="cuda", dtype=torch.bfloat16)
+        image = torch.randn(1, 4, 32, 32).to(device=device, dtype=torch.bfloat16)
         _out = F.interpolate(image, size=(64, 64), mode="nearest")
+        return True
     except:
         shared.log.warning('Torch BF16 test failed: Fallback to FP16 operations')
         return False
@@ -140,7 +141,7 @@ def set_cuda_params():
         dtype = torch.bfloat16 if bf16_ok else torch.float16
         dtype_vae = torch.bfloat16 if bf16_ok else torch.float16
         dtype_unet = torch.bfloat16 if bf16_ok else torch.float16
-    if shared.opts.cuda_dtype == 'FP16' or dtype == torch.bfloat16:
+    if shared.opts.cuda_dtype == 'FP16' or dtype == torch.float16:
         fp16_ok = test_fp16()
         dtype = torch.float16 if fp16_ok else torch.float32
         dtype_vae = torch.float16 if fp16_ok else torch.float32
@@ -153,7 +154,7 @@ def set_cuda_params():
         dtype_vae = torch.float32
         dtype_unet = torch.float32
     if shared.opts.no_half_vae: # set dtype again as no-half-vae options take priority
-        shared.log.info('Torch override VAE dtype: no-half-vae set')
+        shared.log.info('Torch override VAE dtype: no-half set')
         dtype_vae = torch.float32
     unet_needs_upcast = shared.opts.upcast_sampling
     shared.log.debug(f'Desired Torch parameters: dtype={shared.opts.cuda_dtype} no-half={shared.opts.no_half} no-half-vae={shared.opts.no_half_vae} upscast={shared.opts.upcast_sampling}')
