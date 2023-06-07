@@ -112,7 +112,7 @@ def check_updates(_id_task, disable_list, search_text, sort_column):
         except FileNotFoundError as e:
             if 'FETCH_HEAD' not in str(e):
                 raise
-        except Exception:
+        except Exception as e:
             errors.display(e, f'extensions check update: {ext.name}')
         shared.state.nextjob()
     return refresh_extensions_list_from_data(search_text, sort_column), "Extension update complete | Restart required"
@@ -261,7 +261,7 @@ def search_extensions(search_text, sort_column):
 
 
 def refresh_extensions_list_from_data(search_text, sort_column):
-    shared.log.debug(f'Extensions manager: refresh list search="{search_text}" sort="{sort_column}"')
+    # shared.log.debug(f'Extensions manager: refresh list search="{search_text}" sort="{sort_column}"')
     code = """
         <table id="extensions">
             <colgroup>
