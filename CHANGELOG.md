@@ -1,6 +1,11 @@
 # Change Log for SD.Next
 
-## Update for 06/11/2023
+## Update for 06/13/2023
+
+- new cache for models/lora/lyco metadata: `metadata.json`  
+  drastically reduces disk access on app startup  
+
+## Update for 06/12/2023
 
 - updated ui labels and hints to improve clarity and provide some extra info  
   this is 1st stage of the process, more to come...  
@@ -11,12 +16,15 @@
   as some extensions are loading packages directly from their preload sequence  
   which was preventing some optimizations to take effect  
 - updated **settings** tab functionality, thanks @gegell  
+  with real-time monitor for all new and/or updated settings  
 - **launcher** will now warn if application owned files are modified  
+  you are free to add any user files, but do not modify app files unless you're sure in what you're doing  
 - add more profiling for scripts/extensions so you can see what takes time  
   this applies both to initial load as well as execution  
 - experimental `sd_model_dict` setting which allows you to load model dictionary  
   from one model and apply weights from another model specified in `sd_model_checkpoint`  
   results? who am i to judge :)
+
 
 ## Update for 06/05/2023
 
