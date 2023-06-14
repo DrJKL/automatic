@@ -13,7 +13,7 @@ from modules.paths_internal import models_path, script_path, data_path, sd_confi
 import modules.interrogate
 import modules.memmon
 import modules.styles
-import modules.devices as devices
+import modules.devices as devices # pylint: disable=R0402
 import modules.paths_internal as paths
 from installer import log as central_logger # pylint: disable=E0611
 
@@ -269,7 +269,7 @@ def refresh_themes():
                 f.write(json.dumps(res))
         else:
             log.error('Error refreshing UI themes')
-    except:
+    except Exception:
         log.error('Exception refreshing UI themes')
 
 
@@ -288,6 +288,7 @@ else: # cuda
 
 options_templates.update(options_section(('sd', "Stable Diffusion"), {
     "sd_model_checkpoint": OptionInfo(default_checkpoint, "Stable Diffusion checkpoint", gr.Dropdown, lambda: {"choices": list_checkpoint_tiles()}, refresh=refresh_checkpoints),
+    "sd_checkpoint_autoload": OptionInfo(True, "Stable Diffusion checkpoint autoload on server start"),
     "sd_checkpoint_cache": OptionInfo(0, "Number of cached model checkpoints", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}),
     "sd_vae_checkpoint_cache": OptionInfo(0, "Number of cached VAE checkpoints", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}),
     "sd_vae": OptionInfo("Automatic", "Select VAE", gr.Dropdown, lambda: {"choices": shared_items.sd_vae_items()}, refresh=shared_items.refresh_vae_list),
@@ -420,7 +421,7 @@ options_templates.update(options_section(('ui', "User interface"), {
     "keyedit_precision_extra": OptionInfo(0.05, "Ctrl+up/down precision when editing <extra networks:0.9>", gr.Slider, {"minimum": 0.01, "maximum": 0.2, "step": 0.001}),
     "keyedit_delimiters": OptionInfo(".,\/!?%^*;:{}=`~()", "Ctrl+up/down word delimiters"), # pylint: disable=anomalous-backslash-in-string
     "quicksettings_list": OptionInfo(["sd_model_checkpoint"], "Quicksettings list", ui_components.DropdownMulti, lambda: {"choices": list(opts.data_labels.keys())}),
-    "hidden_tabs": OptionInfo([], "Hidden UI tabs", ui_components.DropdownMulti, lambda: {"choices": [x for x in tab_names]}),
+    "hidden_tabs": OptionInfo([], "Hidden UI tabs", ui_components.DropdownMulti, lambda: {"choices": list(tab_names)}),
     "ui_tab_reorder": OptionInfo("From Text, From Image, Process Image", "UI tabs order"),
     "ui_scripts_reorder": OptionInfo("Enable Dynamic Thresholding, ControlNet", "UI scripts order"),
     "ui_reorder": OptionInfo(", ".join(ui_reorder_categories), "txt2img/img2img UI item order"),
@@ -500,7 +501,7 @@ options_templates.update(options_section(('upscaling', "Upscaling"), {
     "ESRGAN_tile": OptionInfo(192, "Tile size for ESRGAN upscalers (0 = no tiling)", gr.Slider, {"minimum": 0, "maximum": 512, "step": 16}),
     "ESRGAN_tile_overlap": OptionInfo(8, "Tile overlap in pixels for ESRGAN upscalers", gr.Slider, {"minimum": 0, "maximum": 48, "step": 1}),
     "SCUNET_tile": OptionInfo(256, "Tile size for SCUNET upscalers (0 = no tiling)", gr.Slider, {"minimum": 0, "maximum": 512, "step": 16}),
-    "SCUNET_tile_overlap": OptionInfo(8, "Tile overlap, in pixels for SCUNET upscalers (low values = visible seam)", gr.Slider, {"minimum": 0, "maximum": 64, "step": 1}),    
+    "SCUNET_tile_overlap": OptionInfo(8, "Tile overlap, in pixels for SCUNET upscalers (low values = visible seam)", gr.Slider, {"minimum": 0, "maximum": 64, "step": 1}),
     "use_old_hires_fix_width_height": OptionInfo(False, "Hires fix uses width & height to set final resolution rather than first pass"),
     "dont_fix_second_order_samplers_schedule": OptionInfo(False, "Do not fix prompt schedule for second order samplers"),
 }))
@@ -523,7 +524,7 @@ options_templates.update(options_section(('extra_networks', "Extra Networks"), {
     "extra_networks_card_width": OptionInfo(0, "Card width for Extra Networks (px)"),
     "extra_networks_card_height": OptionInfo(0, "Card height for Extra Networks (px)"),
     "extra_networks_add_text_separator": OptionInfo(" ", "Extra text to add before <...> when adding extra network to prompt"),
-    "sd_hypernetwork": OptionInfo("None", "Add hypernetwork to prompt", gr.Dropdown, lambda: {"choices": ["None"] + [x for x in hypernetworks.keys()]}, refresh=reload_hypernetworks),
+    "sd_hypernetwork": OptionInfo("None", "Add hypernetwork to prompt", gr.Dropdown, lambda: {"choices": ["None"] + list(hypernetworks.keys())}, refresh=reload_hypernetworks),
 }))
 
 options_templates.update(options_section(('token_merging', 'Token Merging'), {
@@ -557,7 +558,7 @@ class Options:
     def __init__(self):
         self.data = {k: v.default for k, v in self.data_labels.items()}
 
-    def __setattr__(self, key, value):
+    def __setattr__(self, key, value): # pylint: disable=inconsistent-return-statements
         if self.data is not None:
             if key in self.data or key in self.data_labels:
                 if cmd_opts.freeze:
@@ -566,11 +567,9 @@ class Options:
                 if cmd_opts.hide_ui_dir_config and key in restricted_opts:
                     log.warning(f'Settings key is restricted: {key}')
                     return
-                else:
-                    self.data[key] = value
+                self.data[key] = value
                 return
-
-        return super(Options, self).__setattr__(key, value)
+        return super(Options, self).__setattr__(key, value) # pylint: disable=super-with-arguments
 
     def __getattr__(self, item):
         if self.data is not None:
@@ -578,7 +577,7 @@ class Options:
                 return self.data[item]
         if item in self.data_labels:
             return self.data_labels[item].default
-        return super(Options, self).__getattribute__(item)
+        return super(Options, self).__getattribute__(item) # pylint: disable=super-with-arguments
 
     def set(self, key, value):
         """sets an option and calls its onchange callback, returning True if the option changed and False otherwise"""
@@ -660,10 +659,10 @@ class Options:
         """reorder settings so that all items related to section always go together"""
         section_ids = {}
         settings_items = self.data_labels.items()
-        for k, item in settings_items:
+        for _k, item in settings_items:
             if item.section not in section_ids:
                 section_ids[item.section] = len(section_ids)
-        self.data_labels = {k: v for k, v in sorted(settings_items, key=lambda x: section_ids[x[1].section])}
+        self.data_labels = dict(sorted(settings_items, key=lambda x: section_ids[x[1].section]))
 
     def cast_value(self, key, value):
         """casts an arbitrary to the same type as this setting's value with key
@@ -718,8 +717,8 @@ def reload_gradio_theme(theme_name=None):
     res = 0
     try:
         req = urllib.request.Request("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono", method="HEAD")
-        res = urllib.request.urlopen(req, timeout=3.0).status
-    except:
+        res = urllib.request.urlopen(req, timeout=3.0).status # pylint: disable=consider-using-with
+    except Exception:
         res = 0
     if res != 200:
         log.info('No internet access detected, using default fonts')
@@ -743,7 +742,7 @@ def reload_gradio_theme(theme_name=None):
     else:
         try:
             gradio_theme = gr.themes.ThemeClass.from_hub(theme_name)
-        except:
+        except Exception:
             log.error("Theme download error accessing HuggingFace")
             gradio_theme = gr.themes.Default(**default_font_params)
     log.info(f'Loading UI theme: name={theme_name} style={opts.theme_style}')
@@ -794,7 +793,7 @@ def restart_server(restart=True):
         demo.close(verbose=False)
         demo.server.close()
         demo.fns = []
-    except:
+    except Exception:
         pass
     if restart:
         log.info('Server will restart')
@@ -804,9 +803,6 @@ def restore_defaults(restart=True):
     if os.path.exists(cmd_opts.config):
         log.info('Restoring server defaults')
         os.remove(cmd_opts.config)
-    if os.path.exists(cmd_opts.ui_config):
-        log.info('Restoring UI defaults')
-        os.remove(cmd_opts.ui_config)
     restart_server(restart)
 
 
@@ -859,7 +855,7 @@ def get_version():
                 'hash': githash,
                 'url': origin.replace('\n', '') + '/tree/' + branch.replace('\n', '')
             }
-        except:
+        except Exception:
             version = { 'app': 'sd.next' }
     return version
 
