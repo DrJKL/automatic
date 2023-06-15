@@ -23,8 +23,7 @@ Stuff to be investigated...
 
 Pick & merge PRs from main repo...
 
-- TODO: <https://github.com/AUTOMATIC1111/stable-diffusion-webui/compare/89f9faa...baf6946>
-- STATUS: up-to-date 05/13/2023
+- list: <https://github.com/AUTOMATIC1111/stable-diffusion-webui/compare/89f9faa...baf6946>
 
 ## Integration
 
