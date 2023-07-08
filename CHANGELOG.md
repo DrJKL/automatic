@@ -1,12 +1,68 @@
 # Change Log for SD.Next
 
-## Update for 06/22/2023
+## Update for 07/08/2023
 
-- new training tab interface
-  - redesigned preprocess, train embedding, train hypernetwork
-- new models tab interface
-  - new model convert functionality
-  - new model verify functionality
+This is a massive update which has been baking in a `dev` branch for a while now
+
+- merge experimental diffusers support  
+
+*TL;DR*: Yes, you can run **SD-XL** model in **SD.Next** now  
+For details, see Wiki page: [Diffusers](https://github.com/vladmandic/automatic/wiki/Diffusers)  
+Note this is still experimental, so please follow Wiki  
+Additional enhancements and fixes will be provided over the next few days  
+*Thanks to @huggingface team for making this possible and our internal @team for all the early testing*
+
+Release also contains number of smaller updates:
+
+- add pan & zoom controls (touch and mouse) to image viewer (lightbox)  
+- cache extra networks between tabs  
+  this should result in neat 2x speedup on building extra networks  
+- add settings -> extra networks -> do not automatically build extra network pages  
+  speeds up app start if you have a lot of extra networks and you want to build them manually when needed  
+- extra network ui tweaks  
+
+## Update for 07/01/2023
+
+Small quality-of-life updates and bugfixes:
+
+- add option to disallow usage of ckpt checkpoints
+- change lora and lyco dir without server restart
+- additional filename template fields: `uuid`, `seq`, `image_hash`  
+- image toolbar is now shown only when image is present
+- image `Zip` button gone and its not optional setting that applies to standard `Save` button
+- folder `Show` button is present only when working on localhost,  
+  otherwise its replaced with `Copy` that places image URLs on clipboard so they can be used in other apps
+
+## Update for 06/30/2023
+
+A bit bigger update this time, but contained to specific areas...
+
+- change in behavior  
+  extensions no longer auto-update on startup  
+  using `--upgrade` flag upgrades core app as well as all submodules and extensions  
+- **live server log monitoring** in ui  
+  configurable via settings -> live preview  
+- new **extra networks interface**  
+  *note: if you're using a 3rd party ui extension for extra networks, it will likely need to be updated to work with new interface*
+  - display in front of main ui, inline with main ui or as a sidebar  
+  - lazy load thumbnails  
+    drastically reduces load times for large number of extra networks  
+  - auto-create thumbnails from preview images in extra networks in a background thread  
+    significant load time saving on subsequent restarts  
+  - support for info files in addition to description files  
+  - support for variable aspect-ratio thumbnails  
+  - new folder view  
+- **extensions sort** by trending  
+- add requirements check for training  
+
+## Update for 06/26/2023
+
+- new training tab interface  
+  - redesigned preprocess, train embedding, train hypernetwork  
+- new models tab interface  
+  - new model convert functionality, thanks @akegarasu  
+  - new model verify functionality  
+- lot of ipex specific fixes/optimizations, thanks @disty0  
 
 ## Update for 06/20/2023
 

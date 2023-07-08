@@ -8,12 +8,15 @@ if sys.platform == "darwin":
     from modules import mac_specific # pylint: disable=ungrouped-imports
 
 cuda_ok = torch.cuda.is_available()
+previous_oom = 0
+
 
 def has_mps() -> bool:
     if sys.platform != "darwin":
         return False
     else:
         return mac_specific.has_mps
+
 
 def extract_device_id(args, name): # pylint: disable=redefined-outer-name
     for x in range(len(args)):
@@ -23,7 +26,7 @@ def extract_device_id(args, name): # pylint: disable=redefined-outer-name
 
 
 def get_cuda_device_string():
-    if shared.cmd_opts.use_ipex:
+    if backend == 'ipex':
         if shared.cmd_opts.device_id is not None:
             return f"xpu:{shared.cmd_opts.device_id}"
         return "xpu"
@@ -34,7 +37,7 @@ def get_cuda_device_string():
 
 
 def get_optimal_device_name():
-    if (cuda_ok or shared.cmd_opts.use_ipex) and not shared.cmd_opts.use_directml:
+    if (cuda_ok or backend == 'ipex') and not shared.cmd_opts.use_directml:
         return get_cuda_device_string()
     if has_mps():
         return "mps"
@@ -61,10 +64,22 @@ def get_device_for(task):
 
 
 def torch_gc(force=False):
+    mem = memstats.memory_stats()
+    gpu = mem.get('gpu', {})
+    oom = gpu.get('oom', 0)
+    used = round(100 * gpu.get('used', 0) / gpu.get('total', 1))
+    global previous_oom # pylint: disable=global-statement
+    if oom > previous_oom:
+        previous_oom = oom
+        shared.log.warning(f'GPU out-of-memory error: {mem}')
+    if used > 90:
+        shared.log.warning(f'GPU high memory utilization: {used}% {mem}')
+        force = True
+
     if shared.opts.disable_gc and not force:
         return
     collected = gc.collect()
-    if shared.cmd_opts.use_ipex:
+    if backend == 'ipex':
         try:
             with torch.xpu.device(get_cuda_device_string()):
                 torch.xpu.empty_cache()
@@ -89,8 +104,8 @@ def test_fp16():
         _y = layerNorm(x)
         shared.log.debug('Torch FP16 test passed')
         return True
-    except Exception:
-        shared.log.warning('Torch FP16 test failed: Forcing FP32 operations')
+    except Exception as e:
+        shared.log.warning(f'Torch FP16 test failed: Forcing FP32 operations: {e}')
         shared.opts.cuda_dtype = 'FP32'
         shared.opts.no_half = True
         shared.opts.no_half_vae = True
@@ -122,6 +137,7 @@ def set_cuda_params():
             try:
                 torch.backends.cudnn.benchmark = True
                 if shared.opts.cudnn_benchmark:
+                    shared.log.debug('Torch enable cuDNN benchmark')
                     torch.backends.cudnn.benchmark_limit = 0
                 torch.backends.cudnn.allow_tf32 = shared.opts.cuda_allow_tf32
             except Exception:
@@ -161,32 +177,7 @@ def set_cuda_params():
 
 
 args = cmd_args.parser.parse_args()
-if args.use_ipex:
-    #Fix broken function in ipex 1.13.120+xpu
-    from modules.sd_hijack_utils import CondFunc
-    CondFunc('torch.nn.modules.GroupNorm.forward',
-        lambda orig_func, *args, **kwargs: orig_func(args[0], args[1].to(args[0].weight.data.dtype)),
-        lambda *args, **kwargs: args[2].dtype != args[1].weight.data.dtype)
-    CondFunc('torch.nn.modules.Linear.forward',
-        lambda orig_func, *args, **kwargs: orig_func(args[0], args[1].to(args[0].weight.data.dtype)),
-        lambda *args, **kwargs: args[2].dtype != args[1].weight.data.dtype)
-    CondFunc('torch.linalg.solve',
-        lambda orig_func, *args, **kwargs: orig_func(args[0].to("cpu"), args[1].to("cpu")).to(get_cuda_device_string()),
-        lambda *args, **kwargs: True)
-
-    #Use XPU instead of CPU. %20 Perf improvement on weak CPUs.
-    if args.device_id is not None:
-        cpu = torch.device(f"xpu:{args.device_id}")
-    else:
-        cpu = torch.device("xpu")
-else:
-    cpu = torch.device("cpu")
-device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
-dtype = torch.float16
-dtype_vae = torch.float16
-dtype_unet = torch.float16
-unet_needs_upcast = False
-if args.use_ipex:
+if args.use_ipex or (hasattr(torch, 'xpu') and torch.xpu.is_available()):
     backend = 'ipex'
 elif args.use_directml:
     backend = 'directml'
@@ -199,6 +190,55 @@ elif sys.platform == 'darwin':
 else:
     backend = 'cpu'
 
+if backend == 'ipex':
+    #Fix broken functions with ipex
+    from modules.sd_hijack_utils import CondFunc
+    torch.cuda.empty_cache = torch.xpu.empty_cache
+
+    #Functions with dtype errors:
+    CondFunc('torch.nn.modules.GroupNorm.forward',
+        lambda orig_func, *args, **kwargs: orig_func(args[0], args[1].to(args[0].weight.data.dtype)),
+        lambda *args, **kwargs: args[2].dtype != args[1].weight.data.dtype)
+    CondFunc('torch.nn.modules.Linear.forward',
+        lambda orig_func, *args, **kwargs: orig_func(args[0], args[1].to(args[0].weight.data.dtype)),
+        lambda *args, **kwargs: args[2].dtype != args[1].weight.data.dtype)
+    #Functions that does not work with the XPU:
+    #UniPC:
+    CondFunc('torch.linalg.solve',
+        lambda orig_func, *args, **kwargs: orig_func(args[0].to("cpu"), args[1].to("cpu")).to(get_cuda_device_string()),
+        lambda *args, **kwargs: args[1].device != torch.device("cpu"))
+    #SDE Samplers:
+    CondFunc('torch.Generator',
+        lambda orig_func, device: torch.xpu.Generator(device),
+        lambda orig_func, device: device != torch.device("cpu") and device != "cpu")
+    #Diffusers Float64 (ARC GPUs doesn't support double or Float64):
+    CondFunc('torch.from_numpy',
+        lambda orig_func, *args, **kwargs: orig_func(args[0].astype('float32')),
+        lambda *args, **kwargs: args[1].dtype == float)
+    #ControlNet:
+    CondFunc('torch.batch_norm',
+        lambda orig_func, *args, **kwargs: orig_func(args[0].to("cpu"),
+        args[1].to("cpu") if args[1] is not None else args[1],
+        args[2].to("cpu") if args[2] is not None else args[2],
+        args[3].to("cpu") if args[3] is not None else args[3],
+        args[4].to("cpu") if args[4] is not None else args[4],
+        args[5], args[6], args[7], args[8]).to(get_cuda_device_string()),
+        lambda *args, **kwargs: args[1].device != torch.device("cpu"))
+    CondFunc('torch.instance_norm',
+        lambda orig_func, *args, **kwargs: orig_func(args[0].to("cpu"),
+        args[1].to("cpu") if args[1] is not None else args[1],
+        args[2].to("cpu") if args[2] is not None else args[2],
+        args[3].to("cpu") if args[3] is not None else args[3],
+        args[4].to("cpu") if args[4] is not None else args[4],
+        args[5], args[6], args[7], args[8]).to(get_cuda_device_string()),
+        lambda *args, **kwargs: args[1].device != torch.device("cpu"))
+
+cpu = torch.device("cpu")
+device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
+dtype = torch.float16
+dtype_vae = torch.float16
+dtype_unet = torch.float16
+unet_needs_upcast = False
 
 
 def cond_cast_unet(tensor):
@@ -211,7 +251,7 @@ def cond_cast_float(tensor):
 
 def randn(seed, shape):
     torch.manual_seed(seed)
-    if shared.cmd_opts.use_ipex:
+    if backend == 'ipex':
         torch.xpu.manual_seed_all(seed)
     if device.type == 'mps':
         return torch.randn(shape, device=cpu).to(device)
@@ -231,7 +271,7 @@ def autocast(disable=False):
         return contextlib.nullcontext()
     if shared.cmd_opts.use_directml:
         return torch.dml.amp.autocast(dtype)
-    if shared.cmd_opts.use_ipex:
+    if backend == 'ipex':
         return torch.xpu.amp.autocast(enabled=True, dtype=dtype)
     if cuda_ok:
         return torch.autocast("cuda")
@@ -244,7 +284,7 @@ def without_autocast(disable=False):
         return contextlib.nullcontext()
     if shared.cmd_opts.use_directml:
         return torch.dml.amp.autocast(enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
-    if shared.cmd_opts.use_ipex:
+    if backend == 'ipex':
         return torch.xpu.amp.autocast(enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
     if cuda_ok:
         return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()

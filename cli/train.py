@@ -112,6 +112,7 @@ def parse_args():
 
     group_other = parser.add_argument_group('Other')
     group_other.add_argument('--overwrite', default = False, action='store_true', help = "overwrite existing training, default: %(default)s")
+    group_other.add_argument('--experimental', default = False, action='store_true', help = "enable experimental options, default: %(default)s")
     group_other.add_argument('--debug', default = False, action='store_true', help = "enable debug level logging, default: %(default)s")
 
     args = parser.parse_args()
@@ -264,6 +265,7 @@ def prepare_options():
         options.lora.in_json = None
     if args.type == 'dreambooth':
         log.info('train using dreambooth style training')
+        options.lora.vae_batch_size = args.batch
         options.lora.in_json = None
     if args.type == 'lora':
         log.info('train using lora style training')
@@ -372,15 +374,36 @@ def process_inputs():
     process.unload()
 
 
+def check_versions():
+    if args.experimental:
+        log.info('experimental mode enabled')
+        return
+    log.info('checking accelerate')
+    error = False
+    import accelerate
+    if accelerate.__version__ != '0.19.0':
+        log.error(f'invalid accelerate version: accelerate=0.19.0 found={accelerate.__version__}')
+        error = True
+    log.info('checking diffusers')
+    import diffusers
+    if diffusers.__version__ != '0.10.2':
+        log.error(f'invalid diffusers version: diffusers=0.10.2 found={diffusers.__version__}')
+        error = True
+    if error:
+        log.info('> pip install accelerate==0.19.0 diffusers==0.10.2')
+        exit(1)
+
+
 if __name__ == '__main__':
     log.info('SD.Next train script')
     parse_args()
+    setup_logging()
+    check_versions()
     sdapi.sd_url = args.server
     if args.user is not None:
         sdapi.sd_username = args.user
     if args.password is not None:
         sdapi.sd_password = args.password
-    setup_logging()
     prepare_server()
     verify_args()
     prepare_options()
