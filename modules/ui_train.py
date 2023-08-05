@@ -96,7 +96,7 @@ def create_ui(txt2img_preview_params):
                     process_stop.click(fn=lambda: shared.state.interrupt(), inputs=[], outputs=[])
                     process_run.click(
                         fn=wrap_gradio_gpu_call(modules.textual_inversion.ui.preprocess, extra_outputs=[gr.update()]),
-                        _js="start_train_monitoring",
+                        _js="startTrainMonitor",
                         inputs=[
                             dummy_component,
                             process_src,
@@ -188,7 +188,7 @@ def create_ui(txt2img_preview_params):
                             ti_save_every = gr.Number(label='Create interim embeddings', value=500, precision=0)
                         ti_save_image_with_stored_embedding = gr.Checkbox(label='Save images with embedding in PNG chunks', value=True)
                         ti_preview_from_txt2img = gr.Checkbox(label='Use current settings for previews', value=False)
-                        ti_log_directory = gr.Textbox(label='Log directory', placeholder="Path to directory where to write outputs", value=f"{os.path.join(shared.cmd_opts.data_dir, 'train/log/embeddings')}")
+                        ti_log_directory = gr.Textbox(label='Log directory', placeholder="Defaults to train/log/embedding", value="")
 
                     ti_stop.click(fn=lambda: shared.state.interrupt(), inputs=[], outputs=[])
 
@@ -209,7 +209,7 @@ def create_ui(txt2img_preview_params):
 
                     ti_train.click(
                         fn=wrap_gradio_gpu_call(modules.textual_inversion.ui.train_embedding, extra_outputs=[gr.update()]),
-                        _js="start_train_monitoring",
+                        _js="startTrainMonitor",
                         inputs=[
                             dummy_component,
                             ti_name,
@@ -325,7 +325,7 @@ def create_ui(txt2img_preview_params):
 
                     hn_train.click(
                         fn=wrap_gradio_gpu_call(modules.hypernetworks.ui.train_hypernetwork, extra_outputs=[gr.update()]),
-                        _js="start_train_monitoring",
+                        _js="startTrainMonitor",
                         inputs=[
                             dummy_component,
                             hn_name,

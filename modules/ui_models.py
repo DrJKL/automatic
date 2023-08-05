@@ -3,9 +3,10 @@ import json
 from datetime import datetime
 import gradio as gr
 from modules import sd_models, sd_vae, extras
-from modules.ui_components import FormRow
+from modules.ui_components import FormRow, ToolButton
 from modules.ui_common import create_refresh_button
 from modules.call_queue import wrap_gradio_gpu_call
+from modules.shared import opts, log
 import modules.errors
 
 
@@ -30,7 +31,7 @@ def create_ui():
                 with gr.Row():
                     custom_name = gr.Textbox(label="New model name")
                 with gr.Row():
-                    precision = gr.Radio(choices=["fp32", "fp16", "bf16"], value="fp32", label="Model precision")
+                    precision = gr.Radio(choices=["fp32", "fp16", "bf16"], value="fp16", label="Model precision")
                     m_type = gr.Radio(choices=["disabled", "no-ema", "ema-only"], value="disabled", label="Model pruning methods")
                 with gr.Row():
                     checkpoint_formats = gr.CheckboxGroup(choices=["ckpt", "safetensors"], value=["safetensors"], label="Model Format")
@@ -140,12 +141,22 @@ def create_ui():
                     model_checkhash_btn = gr.Button(value="Calculate hash for all models (may take a long time)", variant='primary')
                     model_checkhash_btn.click(fn=sd_models.update_model_hashes, inputs=[], outputs=[models_outcome])
                 with gr.Row():
-                    model_table = gr.DataFrame(model_data, label = 'Model data', show_label = True, interactive = False, wrap = True, overflow_row_behaviour = 'paginate', max_rows = 10, headers = model_headers)
+                    model_table = gr.DataFrame(
+                        value = model_data,
+                        headers = model_headers,
+                        label = 'Model data',
+                        show_label = True,
+                        interactive = False,
+                        wrap = True,
+                        overflow_row_behaviour = 'paginate',
+                        max_rows = 50,
+                    )
 
                 def list_models():
                     total_size = 0
+                    model_data.clear()
+                    txt = ''
                     for m in sd_models.checkpoints_list.values():
-                        txt = ''
                         try:
                             stat = os.stat(m.filename)
                             m_name = m.name.replace('.ckpt', '').replace('.safetensors', '')
@@ -187,11 +198,10 @@ def create_ui():
                 def hf_select(evt: gr.SelectData, data):
                     return data[evt.index[0]][0]
 
-                def hf_download_model(hub_id: str, token):
-                    from modules.shared import log, opts
+                def hf_download_model(hub_id: str, token, variant, revision, mirror):
                     from modules.modelloader import download_diffusers_model
                     try:
-                        download_diffusers_model(hub_id, cache_dir=opts.diffusers_dir, token=token)
+                        download_diffusers_model(hub_id, cache_dir=opts.diffusers_dir, token=token, variant=variant, revision=revision, mirror=mirror)
                     except Exception as e:
                         log.error(f"Diffuser model downloaded error: model={hub_id} {e}")
                         return f"Diffuser model downloaded error: model={hub_id} {e}"
@@ -203,10 +213,18 @@ def create_ui():
                 with gr.Column(scale=6):
                     with gr.Row():
                         hf_search_text = gr.Textbox('', label = 'Seach models', placeholder='search huggingface models')
+                        hf_search_btn = ToolButton(value="🔍", label="Search")
                     with gr.Row():
-                        hf_selected = gr.Textbox('', label = 'Select model', placeholder='select model from search results or enter model name manually')
+                        with gr.Column(scale=2):
+                            with gr.Row():
+                                hf_selected = gr.Textbox('', label = 'Select model', placeholder='select model from search results or enter model name manually')
+                        with gr.Column(scale=1):
+                            with gr.Row():
+                                hf_variant = gr.Textbox(opts.cuda_dtype.lower(), label = 'Specify model variant', placeholder='')
+                                hf_revision = gr.Textbox('', label = 'Specify model revision', placeholder='')
                     with gr.Row():
                         hf_token = gr.Textbox('', label = 'Huggingface token', placeholder='optional access token for private or gated models')
+                        hf_mirror = gr.Textbox('', label = 'Huggingface mirror', placeholder='optional mirror site for downloads')
                 with gr.Column(scale=1):
                     hf_download_model_btn = gr.Button(value="Download model", variant='primary')
 
@@ -216,8 +234,9 @@ def create_ui():
                     hf_results = gr.DataFrame([], label = 'Search results', show_label = True, interactive = False, wrap = True, overflow_row_behaviour = 'paginate', max_rows = 10, headers = hf_headers, datatype = hf_types, type='array')
 
                 hf_search_text.submit(fn=hf_search, inputs=[hf_search_text], outputs=[hf_results])
+                hf_search_btn.click(fn=hf_search, inputs=[hf_search_text], outputs=[hf_results])
                 hf_results.select(fn=hf_select, inputs=[hf_results], outputs=[hf_selected])
-                hf_download_model_btn.click(fn=hf_download_model, inputs=[hf_selected, hf_token], outputs=[models_outcome])
+                hf_download_model_btn.click(fn=hf_download_model, inputs=[hf_selected, hf_token, hf_variant, hf_revision, hf_mirror], outputs=[models_outcome])
 
             # with gr.Tab(label="CivitAI"):
             #    pass

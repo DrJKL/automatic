@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import glob
 import signal
 import asyncio
 import logging
@@ -159,7 +160,12 @@ def initialize():
     # make the program just exit at ctrl+c without waiting for anything
     def sigint_handler(_sig, _frame):
         log.info('Exiting')
-        os._exit(0)
+        try:
+            for f in glob.glob("*.lock"):
+                os.remove(f)
+        except Exception:
+            pass
+        sys.exit(0)
 
     signal.signal(signal.SIGINT, sigint_handler)
 
@@ -180,6 +186,7 @@ def load_model():
     shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='model')), call=False)
     shared.opts.onchange("sd_model_refiner", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='refiner')), call=False)
     shared.opts.onchange("sd_model_dict", wrap_queued_call(lambda: modules.sd_models.reload_model_weights(op='dict')), call=False)
+    shared.opts.onchange("sd_backend", wrap_queued_call(lambda: modules.sd_models.change_backend()), call=False)
     startup_timer.record("checkpoint")
 
 

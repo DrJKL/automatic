@@ -147,9 +147,13 @@ def installed(package, friendly: str = None):
                 version = pkg_resources.get_distribution(p[0]).version
                 # log.debug(f"Package version found: {p[0]} {version}")
                 if len(p) > 1:
-                    ok = ok and version == p[1]
-                    if not ok:
-                        log.warning(f"Package wrong version: {p[0]} {version} required {p[1]}")
+                    exact = version == p[1]
+                    ok = ok and (exact or args.experimental)
+                    if not exact:
+                        if args.experimental:
+                            log.warning(f"Package allowing experimental: {p[0]} {version} required {p[1]}")
+                        else:
+                            log.warning(f"Package wrong version: {p[0]} {version} required {p[1]}")
             else:
                 log.debug(f"Package version not found: {p[0]}")
         return ok
@@ -178,11 +182,9 @@ def pip(arg: str, ignore: bool = False, quiet: bool = False):
 
 # install package using pip if not already installed
 def install(package, friendly: str = None, ignore: bool = False):
-    if args.reinstall:
+    if args.reinstall or args.upgrade:
         global quick_allowed # pylint: disable=global-statement
         quick_allowed = False
-    if args.use_ipex and package == "pytorch_lightning==1.9.4":
-        package = "pytorch_lightning==1.8.6"
     if args.reinstall or not installed(package, friendly):
         pip(f"install --upgrade {package}", ignore=ignore)
 
@@ -230,14 +232,18 @@ def branch(folder):
 
 # update git repository
 def update(folder, current_branch = False):
+    try:
+        git('config rebase.Autostash true')
+    except Exception:
+        pass
     if current_branch:
-        git('pull --autostash --rebase --force', folder)
+        git('pull --rebase --force', folder)
         return
     b = branch(folder)
     if branch is None:
-        git('pull --autostash --rebase --force', folder)
+        git('pull --rebase --force', folder)
     else:
-        git(f'pull origin {b} --autostash --rebase --force', folder)
+        git(f'pull origin {b} --rebase --force', folder)
 
 
 # clone git repository
@@ -285,6 +291,9 @@ def check_python():
 def check_torch():
     if args.quick:
         return
+    if args.skip_torch:
+        log.info('Skipping Torch tests')
+        return
     if args.profile:
         pr = cProfile.Profile()
         pr.enable()
@@ -304,16 +313,22 @@ def check_torch():
         xformers_package = os.environ.get('XFORMERS_PACKAGE', 'xformers==0.0.20' if opts.get('cross_attention_optimization', '') == 'xFormers' else 'none')
     elif allow_rocm and (shutil.which('rocminfo') is not None or os.path.exists('/opt/rocm/bin/rocminfo') or os.path.exists('/dev/kfd')):
         log.info('AMD ROCm toolkit detected')
-        os.environ.setdefault('HSA_OVERRIDE_GFX_VERSION', '10.3.0')
         os.environ.setdefault('PYTORCH_HIP_ALLOC_CONF', 'garbage_collection_threshold:0.8,max_split_size_mb:512')
+        os.environ.setdefault('TENSORFLOW_PACKAGE', 'tensorflow-rocm')
         torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/rocm5.4.2')
         xformers_package = os.environ.get('XFORMERS_PACKAGE', 'none')
-    elif allow_ipex and (args.use_ipex or shutil.which('sycl-ls') is not None or os.environ.get('ONEAPI_ROOT') is not None or os.path.exists('/opt/intel/oneapi')):
-        args.use_ipex = True
+    elif allow_ipex and (args.use_ipex or shutil.which('sycl-ls') is not None or shutil.which('sycl-ls.exe') is not None or os.environ.get('ONEAPI_ROOT') is not None or os.path.exists('/opt/intel/oneapi') or os.path.exists("C:/Program Files (x86)/Intel/oneAPI") or os.path.exists("C:/oneAPI")):
+        args.use_ipex = True # pylint: disable=attribute-defined-outside-init
         log.info('Intel OneAPI Toolkit detected')
-        if shutil.which('sycl-ls') is None:
-            log.error('Intel OneAPI Toolkit is not activated! Start the WebUI with --use-ipex or activate OneAPI manually')
-        torch_command = os.environ.get('TORCH_COMMAND', 'torch==1.13.0a0 torchvision==0.14.1a0 intel_extension_for_pytorch==1.13.120+xpu -f https://developer.intel.com/ipex-whl-stable-xpu')
+        if shutil.which('sycl-ls') is None and shutil.which('sycl-ls.exe') is None:
+            log.error('Intel OneAPI Toolkit is not activated! Activate OneAPI manually!')
+        os.environ.setdefault('NEOReadDebugKeys', '1')
+        os.environ.setdefault('ClDeviceGlobalMemSizeAvailablePercent', '100')
+        if "linux" in sys.platform:
+            torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.1a0 torchvision==0.15.2a0 intel_extension_for_pytorch==2.0.110+xpu -f https://developer.intel.com/ipex-whl-stable-xpu')
+            os.environ.setdefault('TENSORFLOW_PACKAGE', 'tensorflow==2.13.0 intel-extension-for-tensorflow[gpu]')
+        else:
+            torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.0a0 torchvision intel_extension_for_pytorch==2.0.110+gitba7f6c1 -f https://developer.intel.com/ipex-whl-stable-xpu')
     else:
         machine = platform.machine()
         if sys.platform == 'darwin':
@@ -328,8 +343,6 @@ def check_torch():
             torch_command = os.environ.get('TORCH_COMMAND', 'torch torchvision')
     if 'torch' in torch_command and not args.version:
         install(torch_command, 'torch torchvision')
-    if args.skip_torch:
-        log.info('Skipping Torch tests')
     else:
         try:
             import torch
@@ -337,7 +350,8 @@ def check_torch():
             if args.use_ipex and allow_ipex:
                 import intel_extension_for_pytorch as ipex # pylint: disable=import-error, unused-import
                 log.info(f'Torch backend: Intel IPEX {ipex.__version__}')
-                log.info(f'{os.popen("icpx --version").read().rstrip()}')
+                if shutil.which('icpx') is not None:
+                    log.info(f'{os.popen("icpx --version").read().rstrip()}')
                 for device in range(torch.xpu.device_count()):
                     log.info(f'Torch detected GPU: {torch.xpu.get_device_name(device)} VRAM {round(torch.xpu.get_device_properties(device).total_memory / 1024 / 1024)} Compute Units {torch.xpu.get_device_properties(device).max_compute_units}')
             elif torch.cuda.is_available() and (allow_cuda or allow_rocm):
@@ -376,12 +390,7 @@ def check_torch():
                 pip('uninstall xformers --yes --quiet', ignore=True, quiet=True)
     except Exception as e:
         log.debug(f'Cannot install xformers package: {e}')
-    try:
-        tensorflow_package = os.environ.get('TENSORFLOW_PACKAGE', 'tensorflow==2.12.0')
-        install(tensorflow_package, 'tensorflow', ignore=True)
-    except Exception as e:
-        log.debug(f'Cannot install tensorflow package: {e}')
-    if opts.get('cuda_compile_mode', '') == 'hidet':
+    if opts.get('cuda_compile_backend', '') == 'hidet':
         install('hidet', 'hidet')
     if args.profile:
         print_profile(pr, 'Torch')
@@ -418,6 +427,9 @@ def install_packages():
     invisiblewatermark_package = os.environ.get('INVISIBLEWATERMARK_PACKAGE', "git+https://github.com/patrickvonplaten/invisible-watermark.git@remove_onnxruntime_depedency")
     install(invisiblewatermark_package, 'invisible-watermark')
     install('onnxruntime==1.15.1', 'onnxruntime', ignore=True)
+    install('pi-heif', 'pi_heif', ignore=True)
+    tensorflow_package = os.environ.get('TENSORFLOW_PACKAGE', 'tensorflow==2.12.0')
+    install(tensorflow_package, 'tensorflow', ignore=True)
     if args.profile:
         print_profile(pr, 'Packages')
 
@@ -477,17 +489,12 @@ def run_extension_installer(folder):
         log.error(f'Exception running extension installer: {e}')
 
 # get list of all enabled extensions
-def list_extensions(folder, quiet=False):
+def list_extensions_folder(folder, quiet=False):
     name = os.path.basename(folder)
     disabled_extensions_all = opts.get('disable_all_extensions', 'none')
     if disabled_extensions_all != 'none':
-        if not quiet:
-            log.info(f'Disabled {name}: {disabled_extensions_all}')
         return []
     disabled_extensions = opts.get('disabled_extensions', [])
-    if len(disabled_extensions) > 0:
-        if not quiet:
-            log.info(f'Disabled {name}: {disabled_extensions}')
     enabled_extensions = [x for x in os.listdir(folder) if x not in disabled_extensions and not x.startswith('.')]
     if not quiet:
         log.info(f'Enabled {name}: {enabled_extensions}')
@@ -509,7 +516,7 @@ def install_extensions():
     for folder in extension_folders:
         if not os.path.isdir(folder):
             continue
-        extensions = list_extensions(folder, quiet=True)
+        extensions = list_extensions_folder(folder, quiet=True)
         log.debug(f'Extensions all: {extensions}')
         for ext in extensions:
             if ext in extensions_enabled:
@@ -555,6 +562,7 @@ def install_submodules():
         txt = git('submodule')
         log.info('Continuing setup')
     git('submodule --quiet update --init --recursive')
+    git('submodule --quiet sync --recursive')
     submodules = txt.splitlines()
     for submodule in submodules:
         try:
@@ -580,7 +588,7 @@ def install_requirements():
     if args.profile:
         pr = cProfile.Profile()
         pr.enable()
-    if args.skip_requirements:
+    if args.skip_requirements and not args.requirements:
         return
     log.info('Verifying requirements')
     with open('requirements.txt', 'r', encoding='utf8') as f:
@@ -610,21 +618,25 @@ def set_environment():
     os.environ.setdefault('NUMEXPR_MAX_THREADS', '16')
     os.environ.setdefault('PYTHONHTTPSVERIFY', '0')
     os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
+    os.environ.setdefault('HF_HUB_DISABLE_EXPERIMENTAL_WARNING', '1')
     os.environ.setdefault('UVICORN_TIMEOUT_KEEP_ALIVE', '60')
     if sys.platform == 'darwin':
         os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 
 
 def check_extensions():
-    if args.quick:
-        return 0
     newest_all = os.path.getmtime('requirements.txt')
     from modules.paths_internal import extensions_builtin_dir, extensions_dir
     extension_folders = [extensions_builtin_dir] if args.safe else [extensions_builtin_dir, extensions_dir]
+    disabled_extensions_all = opts.get('disable_all_extensions', 'none')
+    if disabled_extensions_all != 'none':
+        log.info(f'Disabled extensions: {disabled_extensions_all}')
+    else:
+        log.info(f'Disabled extensions: {opts.get("disabled_extensions", [])}')
     for folder in extension_folders:
         if not os.path.isdir(folder):
             continue
-        extensions = list_extensions(folder)
+        extensions = list_extensions_folder(folder)
         for ext in extensions:
             newest = 0
             extension_dir = os.path.join(folder, ext)
@@ -739,6 +751,7 @@ def add_args(parser):
     group.add_argument('--debug', default = False, action='store_true', help = "Run installer with debug logging, default: %(default)s")
     group.add_argument('--reset', default = False, action='store_true', help = "Reset main repository to latest version, default: %(default)s")
     group.add_argument('--upgrade', default = False, action='store_true', help = "Upgrade main repository to latest version, default: %(default)s")
+    group.add_argument('--requirements', default = False, action='store_true', help = "Force re-check of requirements, default: %(default)s")
     group.add_argument('--quick', default = False, action='store_true', help = "Run with startup sequence only, default: %(default)s")
     group.add_argument("--use-ipex", default = False, action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s")
     group.add_argument('--use-directml', default = False, action='store_true', help = "Use DirectML if no compatible GPU is detected, default: %(default)s")
@@ -799,4 +812,7 @@ def read_options():
     global opts # pylint: disable=global-statement
     if os.path.isfile(args.config):
         with open(args.config, "r", encoding="utf8") as file:
-            opts = json.load(file)
+            try:
+                opts = json.load(file)
+            except Exception as e:
+                log.error(f'Error reading options file: {file} {e}')

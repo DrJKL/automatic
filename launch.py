@@ -168,6 +168,8 @@ if __name__ == "__main__":
         installer.quick_allowed = False
     if installer.check_timestamp():
         installer.log.info('No changes detected: Quick launch active')
+        installer.install_requirements()
+        installer.check_extensions()
     else:
         installer.install_requirements()
         installer.install_packages()

@@ -11,9 +11,9 @@ import modules.models.diffusion.uni_pc
 
 
 samplers_data_compvis = [
+    sd_samplers_common.SamplerData('UniPC', lambda model: VanillaStableDiffusionSampler(modules.models.diffusion.uni_pc.UniPCSampler, model), [], {}),
     sd_samplers_common.SamplerData('DDIM', lambda model: VanillaStableDiffusionSampler(ldm.models.diffusion.ddim.DDIMSampler, model), [], {"default_eta_is_0": True, "uses_ensd": True}),
     sd_samplers_common.SamplerData('PLMS', lambda model: VanillaStableDiffusionSampler(ldm.models.diffusion.plms.PLMSSampler, model), [], {}),
-    sd_samplers_common.SamplerData('UniPC', lambda model: VanillaStableDiffusionSampler(modules.models.diffusion.uni_pc.UniPCSampler, model), [], {}),
 ]
 
 
@@ -149,8 +149,8 @@ class VanillaStableDiffusionSampler:
             keys = [
                 ('UniPC variant', 'uni_pc_variant'),
                 ('UniPC skip type', 'uni_pc_skip_type'),
-                ('UniPC order', 'uni_pc_order'),
-                ('UniPC lower order final', 'uni_pc_lower_order_final'),
+                ('UniPC order', 'schedulers_solver_order'),
+                ('UniPC lower order final', 'schedulers_use_loworder'),
             ]
 
             for name, key in keys:
@@ -170,8 +170,8 @@ class VanillaStableDiffusionSampler:
 
     def adjust_steps_if_invalid(self, p, num_steps):
         if ((self.config.name == 'DDIM') and p.ddim_discretize == 'uniform') or (self.config.name == 'PLMS') or (self.config.name == 'UniPC'):
-            if self.config.name == 'UniPC' and num_steps < shared.opts.uni_pc_order:
-                num_steps = shared.opts.uni_pc_order
+            if self.config.name == 'UniPC' and num_steps < shared.opts.schedulers_solver_order:
+                num_steps = shared.opts.schedulers_solver_order
             valid_step = 999 / (1000 // num_steps)
             if valid_step == math.floor(valid_step):
                 return min(int(valid_step) + 1, num_steps)
