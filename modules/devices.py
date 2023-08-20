@@ -40,7 +40,7 @@ def get_cuda_device_string():
 
 
 def get_optimal_device_name():
-    if cuda_ok or backend == 'ipex' or backend == 'directml':
+    if cuda_ok or backend == 'directml':
         return get_cuda_device_string()
     if has_mps():
         return "mps"
@@ -67,7 +67,7 @@ def torch_gc(force=False):
         previous_oom = oom
         shared.log.warning(f'GPU out-of-memory error: {mem}')
     if used > 95:
-        shared.log.warning(f'GPU high memory utilization: {used}% {mem}')
+        shared.log.info(f'GPU high memory utilization: {used}% {mem}')
         force = True
         if backend == "directml":
             practical_used = round(100 * torch.cuda.memory_allocated() / (1 << 30) / gpu.get('total', 1))
@@ -76,7 +76,7 @@ def torch_gc(force=False):
     if shared.opts.disable_gc and not force:
         return
     collected = gc.collect()
-    if cuda_ok or backend == 'ipex':
+    if cuda_ok:
         try:
             with torch.cuda.device(get_cuda_device_string()):
                 torch.cuda.empty_cache()
@@ -119,9 +119,9 @@ def set_cuda_params():
     shared.log.debug('Verifying Torch settings')
     if cuda_ok:
         try:
-            torch.backends.cuda.matmul.allow_tf32 = shared.opts.cuda_allow_tf32
-            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = shared.opts.cuda_allow_tf16_reduced
-            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = shared.opts.cuda_allow_tf16_reduced
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
         except Exception:
             pass
         if torch.backends.cudnn.is_available():
@@ -130,7 +130,7 @@ def set_cuda_params():
                 if shared.opts.cudnn_benchmark:
                     shared.log.debug('Torch enable cuDNN benchmark')
                     torch.backends.cudnn.benchmark_limit = 0
-                torch.backends.cudnn.allow_tf32 = shared.opts.cuda_allow_tf32
+                torch.backends.cudnn.allow_tf32 = True
             except Exception:
                 pass
     global dtype, dtype_vae, dtype_unet, unet_needs_upcast # pylint: disable=global-statement
@@ -167,7 +167,7 @@ def set_cuda_params():
 args = cmd_args.parser.parse_args()
 if args.use_ipex or (hasattr(torch, 'xpu') and torch.xpu.is_available()):
     backend = 'ipex'
-    from modules.ipex_specific import ipex_init
+    from modules.intel.ipex import ipex_init
     ipex_init()
 elif args.use_directml:
     backend = 'directml'
@@ -182,7 +182,7 @@ elif sys.platform == 'darwin':
 else:
     backend = 'cpu'
 
-cuda_ok = torch.cuda.is_available() and not backend == 'ipex'
+cuda_ok = torch.cuda.is_available()
 cpu = torch.device("cpu")
 device = device_interrogate = device_gfpgan = device_esrgan = device_codeformer = None
 dtype = torch.float16
@@ -221,8 +221,6 @@ def autocast(disable=False):
         return contextlib.nullcontext()
     if shared.cmd_opts.use_directml:
         return torch.dml.amp.autocast(dtype)
-    if backend == 'ipex':
-        return torch.xpu.amp.autocast(enabled=True, dtype=dtype)
     if cuda_ok:
         return torch.autocast("cuda")
     else:
@@ -234,8 +232,6 @@ def without_autocast(disable=False):
         return contextlib.nullcontext()
     if shared.cmd_opts.use_directml:
         return torch.dml.amp.autocast(enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext() # pylint: disable=unexpected-keyword-arg
-    if backend == 'ipex':
-        return torch.xpu.amp.autocast(enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
     if cuda_ok:
         return torch.autocast("cuda", enabled=False) if torch.is_autocast_enabled() else contextlib.nullcontext()
     else:

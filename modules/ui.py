@@ -93,7 +93,7 @@ def calc_resolution_hires(enable, width, height, hr_scale, hr_resize_x, hr_resiz
     if not enable:
         return ""
     if modules.shared.backend == modules.shared.Backend.DIFFUSERS:
-        return "Hires resize: disabled"
+       return "Hires resize: disabled"
     p = processing.StableDiffusionProcessingTxt2Img(width=width, height=height, enable_hr=True, hr_scale=hr_scale, hr_resize_x=hr_resize_x, hr_resize_y=hr_resize_y)
     p.init_hr()
     with devices.autocast():
@@ -107,7 +107,7 @@ def resize_from_to_html(width, height, scale_by):
     if not target_width or not target_height:
         return "no image selected"
     if modules.shared.backend == modules.shared.Backend.DIFFUSERS:
-        return "Hires resize: disabled"
+       return "Hires resize: disabled"
     return f"Hires resize: from <span class='resolution'>{width}x{height}</span> to <span class='resolution'>{target_width}x{target_height}</span>"
 
 
@@ -379,6 +379,7 @@ def create_ui(startup_timer = None):
                         cfg_scale = gr.Slider(minimum=1.0, maximum=30.0, step=0.1, label='CFG Scale', value=6.0, elem_id="txt2img_cfg_scale")
                         clip_skip = gr.Slider(label='CLIP skip', value=1, minimum=1, maximum=14, step=1, elem_id='txt2img_clip_skip', interactive=True)
                     with FormRow(elem_classes="checkboxes-row", variant="compact"):
+                        full_quality = gr.Checkbox(label='Full quality', value=True, elem_id="txt2img_full_quality")
                         restore_faces = gr.Checkbox(label='Face restore', value=False, visible=len(modules.shared.face_restorers) > 1, elem_id="txt2img_restore_faces")
                         tiling = gr.Checkbox(label='Tiling', value=False, elem_id="txt2img_tiling")
 
@@ -435,7 +436,7 @@ def create_ui(startup_timer = None):
                     txt2img_prompt_styles,
                     steps,
                     sampler_index, latent_index,
-                    restore_faces, tiling,
+                    full_quality, restore_faces, tiling,
                     batch_count, batch_size,
                     cfg_scale, image_cfg_scale,
                     diffusers_guidance_rescale,
@@ -484,6 +485,7 @@ def create_ui(startup_timer = None):
                 (latent_index, "Latent sampler"),
                 (denoising_strength, "Denoising strength"),
                 (refiner_start, "Refiner start"),
+                (full_quality, "Full quality"),
                 (restore_faces, "Face restoration"),
                 (batch_size, "Batch size"),
                 (batch_count, "Batch count"),
@@ -495,6 +497,12 @@ def create_ui(startup_timer = None):
                 (hr_second_pass_steps, "Secondary steps"),
                 (hr_resize_x, "Hires resize-1"),
                 (hr_resize_y, "Hires resize-2"),
+                (diffusers_guidance_rescale, "CFG rescale"),
+                (image_cfg_scale, "Refiner CFG scale"),
+                (refiner_start, "Refiner start"),
+                (tiling, "Tiling"),
+                (refiner_negative, "Negative2"),
+                (refiner_prompt, "Prompt2"),
                 *modules.scripts.scripts_txt2img.infotext_fields
             ]
             parameters_copypaste.add_paste_fields("txt2img", None, txt2img_paste_fields, override_settings)
@@ -659,7 +667,7 @@ def create_ui(startup_timer = None):
                 with FormGroup(visible=show_denoise.value, elem_id=f"{tab}_denoise_group") as denoise_group:
                     with FormRow():
                         denoising_strength = gr.Slider(minimum=0.05, maximum=1.0, step=0.01, label='Denoising strength', value=0.75, elem_id="img2img_denoising_strength")
-                        refiner_start = gr.Slider(minimum=0.0, maximum=1.0, step=0.05, label='Denoise start', value=0.0, elem_id="txt2img_refiner_start")
+                        refiner_start = gr.Slider(minimum=0.0, maximum=1.0, step=0.05, label='Denoise start', value=0.0, elem_id="img2img_refiner_start")
 
                 with FormGroup(visible=show_advanced.value, elem_id=f"{tab}_advanced_group") as advanced_group:
                     with FormRow():
@@ -669,6 +677,7 @@ def create_ui(startup_timer = None):
                         clip_skip = gr.Slider(label='CLIP skip', value=1, minimum=1, maximum=4, step=1, elem_id='img2img_clip_skip', interactive=True)
                         diffusers_guidance_rescale = gr.Slider(minimum=0.0, maximum=1.0, step=0.05, label='Guidance Rescale', value=0.7, elem_id="txt2img_image_cfg_rescale")
                     with FormRow(elem_classes="img2img_checkboxes_row", variant="compact"):
+                        full_quality = gr.Checkbox(label='Full quality', value=True, elem_id="img2img_full_quality")
                         restore_faces = gr.Checkbox(label='Restore faces', value=False, visible=len(modules.shared.face_restorers) > 1, elem_id="img2img_restore_faces")
                         tiling = gr.Checkbox(label='Tiling', value=False, elem_id="img2img_tiling")
 
@@ -733,7 +742,7 @@ def create_ui(startup_timer = None):
                     sampler_index, latent_index,
                     mask_blur, mask_alpha,
                     inpainting_fill,
-                    restore_faces, tiling,
+                    full_quality, restore_faces, tiling,
                     batch_count, batch_size,
                     cfg_scale, image_cfg_scale,
                     diffusers_guidance_rescale,
@@ -819,7 +828,6 @@ def create_ui(startup_timer = None):
             negative_token_button.click(fn=wrap_queued_call(update_token_counter), inputs=[img2img_negative_prompt, steps], outputs=[negative_token_counter])
 
             ui_extra_networks.setup_ui(extra_networks_ui_img2img, img2img_gallery)
-
             img2img_paste_fields = [
                 (img2img_prompt, "Prompt"),
                 (img2img_negative_prompt, "Negative prompt"),
@@ -835,6 +843,7 @@ def create_ui(startup_timer = None):
                 (latent_index, "Latent sampler"),
                 (denoising_strength, "Denoising strength"),
                 (refiner_start, "Refiner start"),
+                (full_quality, "Full quality"), # TODO
                 (restore_faces, "Face restoration"),
                 (batch_size, "Batch size"),
                 (batch_count, "Batch count"),
@@ -846,7 +855,12 @@ def create_ui(startup_timer = None):
                 (hr_second_pass_steps, "Secondary steps"),
                 (hr_resize_x, "Hires resize-1"),
                 (hr_resize_y, "Hires resize-2"),
+                (diffusers_guidance_rescale, "CFG rescale"),
                 (image_cfg_scale, "Image CFG scale"),
+                (refiner_start, "Refiner start"),
+                (tiling, "Tiling"),
+                (refiner_negative, "Negative2"),
+                (refiner_prompt, "Prompt2"),
                 (mask_blur, "Mask blur"),
                 *modules.scripts.scripts_img2img.infotext_fields
             ]
@@ -929,12 +943,7 @@ def create_ui(startup_timer = None):
             return [getattr(opts, _key) for _key in keys_to_reset]
 
         elements_to_reset = [component_dict[_key] for _key in keys_to_reset]
-        indicator = gr.Button(
-            "",
-            elem_classes="modification-indicator",
-            elem_id="modification_indicator_" + key,
-            **kwargs
-        )
+        indicator = gr.Button("", elem_classes="modification-indicator", elem_id="modification_indicator_" + key, **kwargs)
         indicator.click(fn=get_opt_values, outputs=elements_to_reset, show_progress=False)
         return indicator
 

@@ -41,10 +41,11 @@ loaded_hypernetworks = []
 gradio_theme = gr.themes.Base()
 settings_components = None
 pipelines = [
+    'Autodetect',
     'Stable Diffusion', 'Stable Diffusion XL', 'Kandinsky V1', 'Kandinsky V2', 'DeepFloyd IF', 'Shap-E',
     'Stable Diffusion Img2Img', 'Stable Diffusion XL Img2Img', 'Kandinsky V1 Img2Img', 'Kandinsky V2 Img2Img', 'DeepFloyd IF Img2Img', 'Shap-E Img2Img'
 ]
-latent_upscale_default_mode = "Latent"
+latent_upscale_default_mode = "None"
 latent_upscale_modes = {
     "Latent": {"mode": "bilinear", "antialias": False},
     "Latent (antialiased)": {"mode": "bilinear", "antialias": True},
@@ -171,13 +172,11 @@ class State:
             return
         import modules.sd_samplers # pylint: disable=W0621
         try:
-            if opts.show_progress_grid:
-                self.assign_current_image(modules.sd_samplers.samples_to_image_grid(self.current_latent))
-            else:
-                self.assign_current_image(modules.sd_samplers.sample_to_image(self.current_latent))
-        except Exception:
-            pass
-        self.current_image_sampling_step = self.sampling_step
+            image = modules.sd_samplers.samples_to_image_grid(self.current_latent) if opts.show_progress_grid else modules.sd_samplers.sample_to_image(self.current_latent)
+            self.assign_current_image(image)
+            self.current_image_sampling_step = self.sampling_step
+        except Exception as e:
+            log.error(f'Error setting current image: step={self.sampling_step} {e}')
 
     def assign_current_image(self, image):
         self.current_image = image
@@ -303,6 +302,8 @@ def readfile(filename, silent=False):
         with fasteners.InterProcessLock(f"{filename}.lock"):
             with open(filename, "r", encoding="utf8") as file:
                 data = json.load(file)
+                if type(data) is str:
+                    data = json.loads(data)
             if not silent:
                 log.debug(f'Reading: {filename} len={len(data)}')
     except Exception as e:
@@ -372,7 +373,7 @@ options_templates.update(options_section(('optimizations', "Optimizations"), {
 options_templates.update(options_section(('cuda', "Compute Settings"), {
     "memmon_poll_rate": OptionInfo(2, "VRAM usage polls per second during generation", gr.Slider, {"minimum": 0, "maximum": 40, "step": 1}),
     "precision": OptionInfo("Autocast", "Precision type", gr.Radio, lambda: {"choices": ["Autocast", "Full"]}),
-    "cuda_dtype": OptionInfo("FP32" if sys.platform == "darwin" else "FP16", "Device precision type", gr.Radio, lambda: {"choices": ["FP32", "FP16", "BF16"]}),
+    "cuda_dtype": OptionInfo("FP32" if sys.platform == "darwin" else "BF16" if devices.backend == "ipex" else "FP16", "Device precision type", gr.Radio, lambda: {"choices": ["FP32", "FP16", "BF16"]}),
     "no_half": OptionInfo(False, "Use full precision for model (--no-half)", None, None, None),
     "no_half_vae": OptionInfo(False, "Use full precision for VAE (--no-half-vae)"),
     "upcast_sampling": OptionInfo(True if sys.platform == "darwin" else False, "Enable upcast sampling"),
@@ -382,10 +383,10 @@ options_templates.update(options_section(('cuda', "Compute Settings"), {
     "rollback_vae": OptionInfo(False, "Attempt VAE roll back when produced NaN values (experimental)"),
     "opt_channelslast": OptionInfo(False, "Use channels last as torch memory format "),
     "cudnn_benchmark": OptionInfo(False, "Enable full-depth cuDNN benchmark feature"),
-    "cuda_allow_tf32": OptionInfo(True, "Allow TF32 math ops"),
-    "cuda_allow_tf16_reduced": OptionInfo(True, "Allow TF16 reduced precision math ops"),
+    # "cuda_allow_tf32": OptionInfo(True, "Allow TF32 math ops"),
+    # "cuda_allow_tf16_reduced": OptionInfo(True, "Allow TF16 reduced precision math ops"),
     "cuda_compile": OptionInfo(False, "Enable model compile (experimental)"),
-    "cuda_compile_backend": OptionInfo("none", "Model compile backend (experimental)", gr.Radio, lambda: {"choices": ['none', 'inductor', 'cudagraphs', 'aot_ts_nvfuser', 'hidet', 'ipex']}),
+    "cuda_compile_backend": OptionInfo("none", "Model compile backend (experimental)", gr.Radio, lambda: {"choices": ['none', 'inductor', 'cudagraphs', 'aot_ts_nvfuser', 'hidet', 'ipex', 'openvino_fx']}),
     "cuda_compile_mode": OptionInfo("default", "Model compile mode (experimental)", gr.Radio, lambda: {"choices": ['default', 'reduce-overhead', 'max-autotune']}),
     "cuda_compile_fullgraph": OptionInfo(False, "Model compile fullgraph"),
     "cuda_compile_verbose": OptionInfo(False, "Model compile verbose mode"),
@@ -396,12 +397,10 @@ options_templates.update(options_section(('cuda', "Compute Settings"), {
 }))
 
 options_templates.update(options_section(('diffusers', "Diffusers Settings"), {
-    "diffusers_allow_safetensors": OptionInfo(True, 'Diffusers allow loading from safetensors files'),
     "diffusers_pipeline": OptionInfo(pipelines[0], 'Diffusers pipeline', gr.Dropdown, lambda: {"choices": pipelines}),
-    "diffusers_refiner_latents": OptionInfo(True, "Use latents when using refiner"),
     "diffusers_move_base": OptionInfo(False, "Move base model to CPU when using refiner"),
+    "diffusers_move_unet": OptionInfo(False, "Move base model to CPU when using VAE"),
     "diffusers_move_refiner": OptionInfo(True, "Move refiner model to CPU when not in use"),
-    "diffusers_move_unet": OptionInfo(False, "Move UNet to CPU while VAE decoding"),
     "diffusers_extract_ema": OptionInfo(True, "Use model EMA weights when possible"),
     "diffusers_generator_device": OptionInfo("default", "Generator device", gr.Radio, lambda: {"choices": ["default", "cpu"]}),
     "diffusers_seq_cpu_offload": OptionInfo(False, "Enable sequential CPU offload"),
@@ -412,6 +411,7 @@ options_templates.update(options_section(('diffusers', "Diffusers Settings"), {
     "diffusers_attention_slicing": OptionInfo(False, "Enable attention slicing"),
     "diffusers_model_load_variant": OptionInfo("default", "Diffusers model loading variant", gr.Radio, lambda: {"choices": ['default', 'fp32', 'fp16']}),
     "diffusers_vae_load_variant": OptionInfo("default", "Diffusers VAE loading variant", gr.Radio, lambda: {"choices": ['default', 'fp32', 'fp16']}),
+    "diffusers_lora_loader": OptionInfo("sequential apply", "Diffusers LoRA loading variant", gr.Radio, lambda: {"choices": ['sequential apply', 'merge and apply', 'diffusers default']}),
     # "diffusers_force_zeros": OptionInfo(False, "Force zeros for prompts when empty"),
     # "diffusers_aesthetics_score": OptionInfo(6.0, "Require aesthetic score", gr.Slider, {"minimum": 0, "maximum": 10, "step": 0.1}),
 }))
@@ -560,6 +560,7 @@ options_templates.update(options_section(('sampler-params', "Sampler Settings"),
     's_tmin':  OptionInfo(0.0, "sigma tmin",  gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}),
     's_noise': OptionInfo(1.0, "sigma noise", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}),
     'always_discard_next_to_last_sigma': OptionInfo(False, "Always discard next-to-last sigma"),
+    'never_discard_next_to_last_sigma': OptionInfo(False, "Never discard next-to-last sigma"),
 
     "schedulers_sep_compvis": OptionInfo("<h2>CompVis specific config</h2>", "", gr.HTML),
     "ddim_discretize": OptionInfo('uniform', "DDIM discretize img2img", gr.Radio, {"choices": ['uniform', 'quad']}),
@@ -674,6 +675,8 @@ class Options:
     def set(self, key, value):
         """sets an option and calls its onchange callback, returning True if the option changed and False otherwise"""
         oldval = self.data.get(key, None)
+        if oldval is None:
+            oldval = self.data_labels[key].default
         if oldval == value:
             return False
         try:
@@ -701,10 +704,14 @@ class Options:
             log.warning(f'Settings saving is disabled: {filename}')
             return
         try:
-            output = json.dumps(self.data, indent=2)
-            log.debug(f'Saving settings: {filename} len={len(output)}')
-            with open(filename, "w", encoding="utf8") as file:
-                file.write(output)
+            # output = json.dumps(self.data, indent=2)
+            diff = {}
+            for k, v in self.data.items():
+                if k in self.data_labels:
+                    if self.data_labels[k].default != v:
+                        diff[k] = v
+            output = json.dumps(diff, indent=2)
+            writefile(output, filename)
         except Exception as e:
             log.error(f'Saving settings failed: {filename} {e}')
 
@@ -984,7 +991,24 @@ class Shared(sys.modules[__name__].__class__): # this class is here to provide s
     def backend(self):
         return Backend.ORIGINAL if opts.data['sd_backend'] == 'original' else Backend.DIFFUSERS
 
+    @property
+    def sd_model_type(self):
+        try:
+            if backend == Backend.ORIGINAL:
+                model_type = 'ldm'
+            elif "StableDiffusionXL" in self.sd_model.__class__.__name__:
+                model_type = 'sdxl'
+            elif "StableDiffusion" in self.sd_model.__class__.__name__:
+                model_type = 'sd'
+            elif "Kandinsky" in self.sd_model.__class__.__name__:
+                model_type = 'kandinsky'
+            else:
+                model_type = self.sd_model.__class__.__name__
+        except Exception:
+            model_type = 'unknown'
+        return model_type
 
 sd_model = None
 sd_refiner = None
+sd_model_type = ''
 sys.modules[__name__].__class__ = Shared

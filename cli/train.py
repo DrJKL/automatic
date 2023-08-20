@@ -384,7 +384,7 @@ def check_versions():
         log.error(f'invalid diffusers version: diffusers=0.10.2 found={diffusers.__version__}')
         error = True
     if error:
-        log.info('> pip install accelerate==0.19.0 diffusers==0.10.2')
+        log.info('> pip install accelerate==0.20.3 diffusers==0.10.2')
         exit(1)
 
 
