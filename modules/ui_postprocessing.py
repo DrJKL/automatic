@@ -19,13 +19,13 @@ def submit_click(tab_index, extras_image, image_batch, extras_batch_input_dir, e
 
 def create_ui():
     tab_index = gr.State(value=0) # pylint: disable=abstract-class-instantiated
-    with gr.Row().style(equal_height=False, variant='compact'):
+    with gr.Row(equal_height=False, variant='compact', elem_classes="extras"):
         with gr.Column(variant='compact'):
             with gr.Tabs(elem_id="mode_extras"):
                 with gr.TabItem('Single Image', id="single_image", elem_id="extras_single_tab") as tab_single:
                     extras_image = gr.Image(label="Source", source="upload", interactive=True, type="pil", elem_id="extras_image")
                 with gr.TabItem('Process Batch', id="batch_process", elem_id="extras_batch_process_tab") as tab_batch:
-                    image_batch = gr.Files(label="Batch Process", interactive=True, elem_id="extras_image_batch")
+                    image_batch = gr.Files(label="Batch process", interactive=True, elem_id="extras_image_batch")
                 with gr.TabItem('Process Folder', id="batch_from_directory", elem_id="extras_batch_directory_tab") as tab_batch_dir:
                     extras_batch_input_dir = gr.Textbox(label="Input directory", **shared.hide_dirs, placeholder="A directory on the same machine where the server is running.", elem_id="extras_batch_input_dir")
                     extras_batch_output_dir = gr.Textbox(label="Output directory", **shared.hide_dirs, placeholder="Leave blank to save images to the default path.", elem_id="extras_batch_output_dir")
@@ -41,7 +41,7 @@ def create_ui():
                 interrupt.click(fn=lambda: shared.state.interrupt(), inputs=[], outputs=[])
                 skip = gr.Button('Skip', elem_id=f"{id_part}_skip", variant='secondary')
                 skip.click(fn=lambda: shared.state.skip(), inputs=[], outputs=[])
-            result_images, generation_info, html_info, html_info_formatted, html_log = ui_common.create_output_panel("extras", shared.opts.outdir_extras_samples)
+            result_images, generation_info, html_info, html_info_formatted, html_log = ui_common.create_output_panel("extras")
             gr.HTML('File metadata')
             exif_info = gr.HTML(elem_id="pnginfo_html_info")
             gen_info = gr.Text(elem_id="pnginfo_gen_info", visible=False)

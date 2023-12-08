@@ -1,3 +1,15 @@
+const log = (...msg) => {
+  const dt = new Date();
+  const ts = `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}.${dt.getMilliseconds().toString().padStart(3, '0')}`;
+  console.log(ts, ...msg); // eslint-disable-line no-console
+};
+
+const debug = (...msg) => {
+  const dt = new Date();
+  const ts = `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}.${dt.getMilliseconds().toString().padStart(3, '0')}`;
+  console.debug(ts, ...msg); // eslint-disable-line no-console
+};
+
 function gradioApp() {
   const elems = document.getElementsByTagName('gradio-app');
   const elem = elems.length === 0 ? document : elems[0];
@@ -63,12 +75,14 @@ let executedOnLoaded = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   const mutationObserver = new MutationObserver((m) => {
-    if (!executedOnLoaded && gradioApp().querySelector('#txt2img_prompt')) {
+    if (!executedOnLoaded && gradioApp().getElementById('txt2img_prompt')) {
       executedOnLoaded = true;
       executeCallbacks(uiLoadedCallbacks);
     }
-    executeCallbacks(uiUpdateCallbacks, m);
-    scheduleAfterUiUpdateCallbacks();
+    if (executedOnLoaded) {
+      executeCallbacks(uiUpdateCallbacks, m);
+      scheduleAfterUiUpdateCallbacks();
+    }
     const newTab = getUICurrentTab();
     if (newTab && (newTab !== uiCurrentTab)) {
       uiCurrentTab = newTab;

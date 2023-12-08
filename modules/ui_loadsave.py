@@ -15,12 +15,15 @@ class UiLoadsave:
         self.ui_defaults_apply = None # button
         self.ui_defaults_review = None # button
         self.ui_defaults_restore = None # button
+        self.ui_defaults_submenu = None # button
+        self.component_open = {}
         self.ui_defaults = {}
         self.ui_settings = self.read_from_file()
 
     def add_component(self, path, x):
         """adds component to the registry of tracked components"""
         assert not self.finalized_ui
+
         def apply_field(obj, field, condition=None, init_field=None):
             key = f"{path}/{field}"
             if getattr(obj, 'custom_script_source', None) is not None:
@@ -40,15 +43,27 @@ class UiLoadsave:
                     init_field(saved_value)
             if field == 'value' and key not in self.component_mapping:
                 self.component_mapping[key] = x
+            if field == 'open' and key not in self.component_mapping:
+                self.component_open[key] = x
+
         if type(x) in [gr.Slider, gr.Radio, gr.Checkbox, gr.Textbox, gr.Number, gr.Dropdown, ToolButton, gr.Button] and x.visible:
             apply_field(x, 'visible')
+        if type(x) == gr.Accordion:
+            apply_field(x, 'open')
         if type(x) == gr.Slider:
             apply_field(x, 'value')
             apply_field(x, 'minimum')
             apply_field(x, 'maximum')
             apply_field(x, 'step')
         if type(x) == gr.Radio:
-            apply_field(x, 'value', lambda val: val in x.choices)
+            def check_choices(val):
+                for choice in x.choices:
+                    if type(choice) == tuple:
+                        choice = choice[0]
+                    if choice == val:
+                        return True
+                return False
+            apply_field(x, 'value', check_choices)
         if type(x) == gr.Checkbox:
             apply_field(x, 'value')
         if type(x) == gr.Textbox:
@@ -57,10 +72,14 @@ class UiLoadsave:
             apply_field(x, 'value')
         if type(x) == gr.Dropdown:
             def check_dropdown(val):
+                if x.choices is None:
+                    errors.log.warning(f'UI: path={path} value={getattr(x, "value", None)}, choices={getattr(x, "choices", None)}')
+                    return False
+                choices = [c[0] for c in x.choices] if type(x.choices) == list and len(x.choices) > 0 and type(x.choices[0]) == tuple else x.choices
                 if getattr(x, 'multiselect', False):
-                    return all(value in x.choices for value in val)
+                    return all(value in choices for value in val)
                 else:
-                    return val in x.choices
+                    return val in choices
             apply_field(x, 'value', check_dropdown, getattr(x, 'init_field', None))
 
         def check_tab_id(tab_id):
@@ -79,9 +98,10 @@ class UiLoadsave:
     def add_block(self, x, path=""):
         """adds all components inside a gradio block x to the registry of tracked components"""
         if hasattr(x, 'children'):
+            if isinstance(x, gr.Accordion):
+                self.add_component(f"{path}/{x.label}", x)
             if isinstance(x, gr.Tabs) and x.elem_id is not None:
-                # Tabs element can't have a label, have to use elem_id instead
-                self.add_component(f"{path}/Tabs@{x.elem_id}", x)
+                self.add_component(f"{path}/Tabs@{x.elem_id}", x) # Tabs element dont have a label, have to use elem_id instead
             for c in x.children:
                 self.add_block(c, path)
         elif x.label is not None:
@@ -104,16 +124,12 @@ class UiLoadsave:
         self.write_to_file(self.ui_settings)
 
     def iter_changes(self, values):
-        from modules.shared import log
-        """
-        given a dictionary with defaults from a file and current values from gradio elements, returns
-        an iterator over tuples of values that are not the same between the file and the current;
-        tuple contents are: path, old value, new value
-        """
-        # for (path, component), new_value in zip(self.component_mapping.items(), values):
         for i, name in enumerate(self.component_mapping):
             component = self.component_mapping[name]
             choices = getattr(component, 'choices', None)
+            if type(choices) is list and len(choices) > 0: # fix gradio radio button choices being tuples
+                if type(choices[0]) is tuple:
+                    choices = [c[0] for c in choices]
             new_value = values[i]
             if isinstance(new_value, int) and choices:
                 if new_value >= len(choices):
@@ -127,32 +143,101 @@ class UiLoadsave:
                 continue
             if (new_value == default_value) and (old_value is None):
                 continue
-            log.debug(f'Settings: name={name} component={component} old={old_value} default={default_value} new={new_value}')
+            yield name, old_value, new_value, default_value
+        return []
+
+    def iter_menus(self):
+        for _i, name in enumerate(self.component_open):
+            old_value = self.ui_settings.get(name, None)
+            new_value = self.component_open[name].open
+            default_value = self.ui_defaults.get(name, '')
+            if old_value == new_value:
+                continue
+            if (new_value == default_value) and (old_value is None):
+                continue
             yield name, old_value, new_value, default_value
         return []
 
     def ui_view(self, *values):
-        text = ['<table style="width: -webkit-fill-available"><thead style="font-size: 110%; border-style: solid; border-bottom: 1px var(--button-primary-border-color) solid"><tr><th>Variable</th><th>User value</th><th>New value</th><th>Default value</th></thead><tbody>']
-        for path, old_value, new_value, default_value in self.iter_changes(values):
+        text = """
+            <table id="ui-defauls">
+                <colgroup>
+                    <col style="width: 20%; background: var(--table-border-color)">
+                    <col style="width: 10%; background: var(--panel-background-fill)">
+                    <col style="width: 10%; background: var(--panel-background-fill)">
+                    <col style="width: 10%; background: var(--panel-background-fill)">
+                </colgroup>
+                <thead style="font-size: 110%; border-style: solid; border-bottom: 1px var(--button-primary-border-color) solid">
+                <tr>
+                    <th>Name</th>
+                    <th>Saved value</th>
+                    <th>New value</th>
+                    <th>Default value</th>
+                </tr>
+                </thead>
+            <tbody>"""
+        changed = 0
+        for name, old_value, new_value, default_value in self.iter_changes(values):
+            changed += 1
             if old_value is None:
-                old_value = "<span class='ui-defaults-none'>None</span>"
-            text.append(f"<tr><td>{path}</td><td>{old_value}</td><td>{new_value}</td><td>{default_value}</td></tr>")
-        if len(text) == 1:
-            text.append("<tr><td colspan=3>No changes</td></tr>")
-        text.append("</tbody>")
-        return "".join(text)
+                old_value = "None"
+            text += f"<tr><td>{name}</td><td>{old_value}</td><td>{new_value}</td><td>{default_value}</td></tr>"
+        text += "</tbody></table>"
+        if changed == 0:
+            text = '<h2>No changes</h2>'
+        else:
+            text = f'<h2>Changed values: {changed}</h2>' + text
+        return text
 
     def ui_apply(self, *values):
+        from modules.shared import log
         num_changed = 0
         current_ui_settings = self.read_from_file()
-        for path, _, new_value, _ in self.iter_changes(values):
+        for name, old_value, new_value, default_value in self.iter_changes(values):
+            component = self.component_mapping[name]
+            log.debug(f'Settings: name={name} component={component} old={old_value} default={default_value} new={new_value}')
             num_changed += 1
-            current_ui_settings[path] = new_value
+            current_ui_settings[name] = new_value
         if num_changed == 0:
             return "No changes"
         self.write_to_file(current_ui_settings)
         errors.log.info(f'UI defaults saved: {self.filename}')
         return f"Wrote {num_changed} changes"
+
+    def ui_submenu_apply(self, items):
+        text = """
+            <table id="ui-defauls">
+                <colgroup>
+                    <col style="width: 20%; background: var(--table-border-color)">
+                    <col style="width: 10%; background: var(--panel-background-fill)">
+                </colgroup>
+                <thead style="font-size: 110%; border-style: solid; border-bottom: 1px var(--button-primary-border-color) solid">
+                <tr>
+                    <th>Menu</th>
+                    <th>State</th>
+                </tr>
+                </thead>
+            <tbody>"""
+        for k in self.component_open.keys():
+            opened = len([i for i, j in items.items() if j is True and i in k]) > 0
+            self.component_open[k].open = opened
+            text += f"<tr><td>{k}</td><td>{'open' if opened else 'closed'}</td></tr>"
+        text += "</tbody></table>"
+
+        from modules.shared import log
+        num_changed = 0
+        current_ui_settings = self.read_from_file()
+        for name, _old_value, new_value, default_value in self.iter_menus():
+            log.debug(f'Settings: name={name} default={default_value} new={new_value}')
+            num_changed += 1
+            current_ui_settings[name] = new_value
+        if num_changed == 0:
+            text += '<br>No changes'
+        else:
+            self.write_to_file(current_ui_settings)
+            errors.log.info(f'UI defaults saved: {self.filename}')
+            text += f'<br>Changes: {num_changed}'
+        return text
 
     def ui_restore(self):
         if os.path.exists(self.filename):
@@ -162,12 +247,12 @@ class UiLoadsave:
 
     def create_ui(self):
         """creates ui elements for editing defaults UI, without adding any logic to them"""
-        gr.HTML(f"Review changed values and apply them as new user interface defaults<br>Config file: {self.filename}")
-        with gr.Row():
-            self.ui_defaults_view = gr.Button(value='View changes', elem_id="ui_defaults_view", variant="secondary")
+        with gr.Row(elem_id="config_row"):
             self.ui_defaults_apply = gr.Button(value='Set new defaults', elem_id="ui_defaults_apply", variant="primary")
+            self.ui_defaults_submenu = gr.Button(value='Set menu states', elem_id="ui_submenu_apply", variant="primary")
             self.ui_defaults_restore = gr.Button(value='Restore system defaults', elem_id="ui_defaults_restore", variant="primary")
-        self.ui_defaults_review = gr.HTML("")
+            self.ui_defaults_view = gr.Button(value='Refresh changes', elem_id="ui_defaults_view", variant="secondary")
+        self.ui_defaults_review = gr.HTML("", elem_id="ui_defaults_review")
 
     def setup_ui(self):
         """adds logic to elements created with create_ui; all add_block class must be made before this"""
@@ -176,3 +261,4 @@ class UiLoadsave:
         self.ui_defaults_view.click(fn=self.ui_view, inputs=list(self.component_mapping.values()), outputs=[self.ui_defaults_review])
         self.ui_defaults_apply.click(fn=self.ui_apply, inputs=list(self.component_mapping.values()), outputs=[self.ui_defaults_review])
         self.ui_defaults_restore.click(fn=self.ui_restore, inputs=[], outputs=[self.ui_defaults_review])
+        self.ui_defaults_submenu.click(fn=self.ui_submenu_apply, _js='uiOpenSubmenus', inputs=[self.ui_defaults_review], outputs=[self.ui_defaults_review])

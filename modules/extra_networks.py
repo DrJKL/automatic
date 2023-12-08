@@ -17,6 +17,8 @@ def register_extra_network(extra_network):
 def register_default_extra_networks():
     from modules.extra_networks_hypernet import ExtraNetworkHypernet
     register_extra_network(ExtraNetworkHypernet())
+    from modules.ui_extra_networks_styles import ExtraNetworkStyles
+    register_extra_network(ExtraNetworkStyles())
 
 
 class ExtraNetworkParams:
@@ -62,6 +64,8 @@ class ExtraNetwork:
 
 def activate(p, extra_network_data):
     """call activate for extra networks in extra_network_data in specified order, then call activate for all remaining registered networks with an empty argument list"""
+    if extra_network_data is None:
+        return
     for extra_network_name, extra_network_args in extra_network_data.items():
         extra_network = extra_network_registry.get(extra_network_name, None)
         if extra_network is None:
@@ -70,7 +74,7 @@ def activate(p, extra_network_data):
         try:
             extra_network.activate(p, extra_network_args)
         except Exception as e:
-            errors.display(e, f"activating extra network {extra_network_name} with arguments {extra_network_args}")
+            errors.display(e, f"activating extra network: name={extra_network_name} args:{extra_network_args}")
 
     for extra_network_name, extra_network in extra_network_registry.items():
         args = extra_network_data.get(extra_network_name, None)
@@ -79,11 +83,13 @@ def activate(p, extra_network_data):
         try:
             extra_network.activate(p, [])
         except Exception as e:
-            errors.display(e, f"activating extra network {extra_network_name}")
+            errors.display(e, f"activating extra network: name={extra_network_name}")
 
 
 def deactivate(p, extra_network_data):
     """call deactivate for extra networks in extra_network_data in specified order, then call deactivate for all remaining registered networks"""
+    if extra_network_data is None:
+        return
     for extra_network_name in extra_network_data:
         extra_network = extra_network_registry.get(extra_network_name, None)
         if extra_network is None:

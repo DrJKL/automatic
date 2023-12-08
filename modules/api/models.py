@@ -204,7 +204,7 @@ class PreprocessResponse(BaseModel):
 
 fields = {}
 for key, metadata in shared.opts.data_labels.items():
-    value = shared.opts.data.get(key)
+    value = shared.opts.data.get(key) or shared.opts.data_labels[key].default
     optType = shared.opts.typemap.get(type(metadata.default), type(value))
 
     if metadata is not None:
@@ -245,10 +245,11 @@ class UpscalerItem(BaseModel):
 
 class SDModelItem(BaseModel):
     title: str = Field(title="Title")
-    model_name: str = Field(title="Model Name")
-    hash: Optional[str] = Field(title="Short hash")
-    sha256: Optional[str] = Field(title="sha256 hash")
+    name: str = Field(title="Model Name")
     filename: str = Field(title="Filename")
+    type: str = Field(title="Model type")
+    sha256: Optional[str] = Field(title="SHA256 hash")
+    hash: Optional[str] = Field(title="Short hash")
     config: Optional[str] = Field(title="Config file")
 
 class HypernetworkItem(BaseModel):
@@ -264,10 +265,27 @@ class RealesrganItem(BaseModel):
     path: Optional[str] = Field(title="Path")
     scale: Optional[int] = Field(title="Scale")
 
-class PromptStyleItem(BaseModel):
+class StyleItem(BaseModel):
     name: str = Field(title="Name")
     prompt: Optional[str] = Field(title="Prompt")
     negative_prompt: Optional[str] = Field(title="Negative Prompt")
+    extra: Optional[str] = Field(title="Extra")
+    filename: Optional[str] = Field(title="Filename")
+    preview: Optional[str] = Field(title="Preview")
+
+class ExtraNetworkItem(BaseModel):
+    name: str = Field(title="Name")
+    type: str = Field(title="Type")
+    title: Optional[str] = Field(title="Title")
+    fullname: Optional[str] = Field(title="Fullname")
+    filename: Optional[str] = Field(title="Filename")
+    hash: Optional[str] = Field(title="Hash")
+    preview: Optional[str] = Field(title="Preview image URL")
+    # description: Optional[str] = Field(title="Description")
+    # info: Optional[str] = Field(title="Information")
+    # metadata: Optional[Any] = Field(title="Metadata")
+    # local: Optional[str] = Field(title="Local")
+
 
 class ArtistItem(BaseModel):
     name: str = Field(title="Name")
@@ -300,7 +318,7 @@ class ScriptArg(BaseModel):
     minimum: Optional[Any] = Field(default=None, title="Minimum", description="Minimum allowed value for the argumentin UI")
     maximum: Optional[Any] = Field(default=None, title="Minimum", description="Maximum allowed value for the argumentin UI")
     step: Optional[Any] = Field(default=None, title="Minimum", description="Step for changing value of the argumentin UI")
-    choices: Optional[List[str]] = Field(default=None, title="Choices", description="Possible values for the argument")
+    choices: Optional[Any] = Field(default=None, title="Choices", description="Possible values for the argument")
 
 
 class ScriptInfo(BaseModel):

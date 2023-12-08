@@ -4,7 +4,7 @@ from PIL import Image
 import modules.scripts as scripts
 from modules import processing, shared, images, devices
 from modules.processing import Processed
-from modules.shared import opts, state
+from modules.shared import opts, state, log
 
 
 class Script(scripts.Script):
@@ -18,7 +18,7 @@ class Script(scripts.Script):
         info = gr.HTML("<p style=\"margin-bottom:0.75em\">Will upscale the image by the selected scale factor; use width and height sliders to set tile size</p>")
         overlap = gr.Slider(minimum=0, maximum=256, step=16, label='Tile overlap', value=64, elem_id=self.elem_id("overlap"))
         scale_factor = gr.Slider(minimum=1.0, maximum=4.0, step=0.05, label='Scale Factor', value=2.0, elem_id=self.elem_id("scale_factor"))
-        upscaler_index = gr.Radio(label='Upscaler', choices=[x.name for x in shared.sd_upscalers], value=shared.sd_upscalers[0].name, type="index", elem_id=self.elem_id("upscaler_index"))
+        upscaler_index = gr.Dropdown(label='Upscaler', choices=[x.name for x in shared.sd_upscalers], value=shared.sd_upscalers[0].name, type="index", elem_id=self.elem_id("upscaler_index"))
 
         return [info, overlap, upscaler_index, scale_factor]
 
@@ -61,7 +61,7 @@ class Script(scripts.Script):
         batch_count = math.ceil(len(work) / batch_size)
         state.job_count = batch_count * upscale_count
 
-        print(f"SD upscaling will process a total of {len(work)} images tiled as {len(grid.tiles[0][2])}x{len(grid.tiles)} per upscale in a total of {state.job_count} batches.")
+        log.info(f"SD upscale: images={len(work)} tile={len(grid.tiles[0][2])}x{len(grid.tiles)} batches={state.job_count}")
 
         result_images = []
         for n in range(upscale_count):
@@ -72,8 +72,7 @@ class Script(scripts.Script):
             for i in range(batch_count):
                 p.batch_size = batch_size
                 p.init_images = work[i * batch_size:(i + 1) * batch_size]
-
-                state.job = f"Batch {i + 1 + n * batch_count} out of {state.job_count}"
+                state.job = f"upscale batch {i+1+n*batch_count}/{state.job_count}"
                 processed = processing.process_images(p)
 
                 if initial_info is None:

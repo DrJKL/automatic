@@ -23,7 +23,7 @@ def list_samplers(backend_name = shared.backend):
     samplers = all_samplers
     samplers_for_img2img = all_samplers
     samplers_map = {}
-    shared.log.debug(f'Available samplers: {[x.name for x in all_samplers]}')
+    # shared.log.debug(f'Available samplers: {[x.name for x in all_samplers]}')
 
 
 def find_sampler_config(name):
@@ -32,6 +32,11 @@ def find_sampler_config(name):
     else:
         config = all_samplers[0]
     return config
+
+
+def visible_sampler_names():
+    visible_samplers = [x for x in all_samplers if x.name in shared.opts.show_samplers] if len(shared.opts.show_samplers) > 0 else all_samplers
+    return visible_samplers
 
 
 def create_sampler(name, model):
@@ -46,29 +51,26 @@ def create_sampler(name, model):
     if shared.backend == shared.Backend.ORIGINAL:
         sampler = config.constructor(model)
         sampler.config = config
+        sampler.initialize(p=None)
         sampler.name = name
-        shared.log.debug(f'Sampler: {sampler.name} {sampler.config.options}')
+        shared.log.debug(f'Sampler: sampler="{sampler.name}" config={sampler.config.options}')
         return sampler
     elif shared.backend == shared.Backend.DIFFUSERS:
         sampler = config.constructor(model)
         if not hasattr(model, 'scheduler_config'):
             model.scheduler_config = sampler.sampler.config.copy()
         model.scheduler = sampler.sampler
-        shared.log.debug(f'Sampler: {sampler.name} {sampler.config}')
+        shared.log.debug(f'Sampler: sampler="{sampler.name}" config={sampler.config}')
         return sampler.sampler
     else:
         return None
 
 
 def set_samplers():
-    global samplers, samplers_for_img2img # pylint: disable=global-statement
-    shown_img2img = set(shared.opts.show_samplers)
-    if len(shared.opts.show_samplers) == 0:
-        shown = {'PLMS', 'UniPC'}
-    else:
-        shown = set(shared.opts.show_samplers + ['PLMS'])
-    samplers = [x for x in all_samplers if x.name in shown]
-    samplers_for_img2img = [x for x in all_samplers if x.name in shown_img2img]
+    global samplers # pylint: disable=global-statement
+    global samplers_for_img2img # pylint: disable=global-statement
+    samplers = visible_sampler_names()
+    samplers_for_img2img = [x for x in samplers if x.name != "PLMS"]
     samplers_map.clear()
     for sampler in all_samplers:
         samplers_map[sampler.name.lower()] = sampler.name

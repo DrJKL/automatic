@@ -6,6 +6,7 @@ import modules.dml.amp as amp
 
 from .utils import rDevice, get_device
 from .device import device
+from .Generator import Generator
 from .device_properties import DeviceProperties
 
 def amd_mem_get_info(device: Optional[rDevice]=None) -> tuple[int, int]:
@@ -22,6 +23,7 @@ def mem_get_info(device: Optional[rDevice]=None) -> tuple[int, int]:
 class DirectML:
     amp = amp
     device = device
+    Generator = Generator
 
     context_device: Optional[torch.device] = None
 
@@ -58,10 +60,9 @@ class DirectML:
         return DeviceProperties(get_device(device))
 
     def memory_stats(device: Optional[rDevice]=None):
-        mem_stat_fill = "DirectMLDevice"
         return {
             "num_ooms": 0,
-            "num_alloc_retries": mem_stat_fill,
+            "num_alloc_retries": 0,
         }
 
     mem_get_info: Callable = mem_get_info

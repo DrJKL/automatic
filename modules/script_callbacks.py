@@ -92,12 +92,15 @@ class ImageGridLoopParams:
 ScriptCallback = namedtuple("ScriptCallback", ["script", "callback"])
 callback_map = dict(
     callbacks_app_started=[],
+    callbacks_before_process=[],
+    callbacks_after_process=[],
     callbacks_model_loaded=[],
     callbacks_ui_tabs=[],
     callbacks_ui_train_tabs=[],
     callbacks_ui_settings=[],
     callbacks_before_image_saved=[],
     callbacks_image_saved=[],
+    callbacks_image_save_btn=[],
     callbacks_cfg_denoiser=[],
     callbacks_cfg_denoised=[],
     callbacks_cfg_after_cfg=[],
@@ -115,7 +118,7 @@ def timer(t0: float, script, callback: str):
     t1 = time.time()
     s = round(t1 - t0, 2)
     if s > 0.1:
-        errors.log.debug(f'Script: {s}s {callback} {script}')
+        errors.log.debug(f'Script: {s} {callback} {script}')
 
 
 def clear_callbacks():
@@ -131,6 +134,26 @@ def app_started_callback(demo: Optional[Blocks], app: FastAPI):
             timer(t0, c.script, 'app_started')
         except Exception as e:
             report_exception(e, c, 'app_started_callback')
+
+
+def before_process_callback(p):
+    for c in callback_map['callbacks_before_process']:
+        try:
+            t0 = time.time()
+            c.callback(p)
+            timer(t0, c.script, 'before_process')
+        except Exception as e:
+            report_exception(e, c, 'before_process_callback')
+
+
+def after_process_callback(p):
+    for c in callback_map['callbacks_after_process']:
+        try:
+            t0 = time.time()
+            c.callback(p)
+            timer(t0, c.script, 'after_process')
+        except Exception as e:
+            report_exception(e, c, 'after_process_callback')
 
 
 def app_reload_callback():
@@ -203,6 +226,16 @@ def image_saved_callback(params: ImageSaveParams):
             timer(t0, c.script, 'image_saved')
         except Exception as e:
             report_exception(e, c, 'image_saved_callback')
+
+
+def image_save_btn_callback(filename: str):
+    for c in callback_map['callbacks_image_save_btn']:
+        try:
+            t0 = time.time()
+            c.callback(filename)
+            timer(t0, c.script, 'image_save_btn')
+        except Exception as e:
+            report_exception(e, c, 'image_save_btn_callback')
 
 
 def cfg_denoiser_callback(params: CFGDenoiserParams):
@@ -296,7 +329,7 @@ def before_ui_callback():
 
 
 def add_callback(callbacks, fun):
-    stack = [x for x in inspect.stack() if x.filename != __file__]
+    stack = [x for x in inspect.stack(0) if x.filename != __file__]
     filename = stack[0].filename if len(stack) > 0 else 'unknown file'
     callbacks.append(ScriptCallback(filename, fun))
 
@@ -321,6 +354,16 @@ def on_app_started(callback):
     """register a function to be called when the webui started, the gradio `Block` component and
     fastapi `FastAPI` object are passed as the arguments"""
     add_callback(callback_map['callbacks_app_started'], callback)
+
+
+def on_before_process(callback):
+    """register a function to be called just before processing starts"""
+    add_callback(callback_map['callbacks_before_process'], callback)
+
+
+def on_after_process(callback):
+    """register a function to be called just after processing ends"""
+    add_callback(callback_map['callbacks_after_process'], callback)
 
 
 def on_before_reload(callback):
@@ -374,6 +417,14 @@ def on_image_saved(callback):
         - params: ImageSaveParams - parameters the image was saved with. Changing fields in this object does nothing.
     """
     add_callback(callback_map['callbacks_image_saved'], callback)
+
+
+def on_image_save_btn(callback):
+    """register a function to be called after an image save button is pressed.
+    The callback is called with one argument:
+        - params: ImageSaveParams - parameters the image was saved with. Changing fields in this object does nothing.
+    """
+    add_callback(callback_map['callbacks_image_save_btn'], callback)
 
 
 def on_cfg_denoiser(callback):
@@ -443,5 +494,4 @@ def on_script_unloaded(callback):
 
 def on_before_ui(callback):
     """register a function to be called before the UI is created."""
-
     add_callback(callback_map['callbacks_before_ui'], callback)

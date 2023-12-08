@@ -1,4 +1,4 @@
-from types import MethodType
+from types import MethodType, SimpleNamespace
 import torch
 from torch.nn.functional import silu
 import ldm.modules.attention
@@ -28,6 +28,7 @@ ldm.modules.attention.BasicTransformerBlock.ATTENTION_MODES["softmax-xformers"] 
 ldm.modules.attention.print = lambda *args: None
 ldm.modules.diffusionmodules.model.print = lambda *args: None
 
+current_optimizer = SimpleNamespace(**{ "name": "none" })
 
 def apply_optimizations():
     undo_optimizations()
@@ -37,48 +38,42 @@ def apply_optimizations():
     can_use_sdp = hasattr(torch.nn.functional, "scaled_dot_product_attention") and callable(torch.nn.functional.scaled_dot_product_attention)
     if devices.device == torch.device("cpu"):
         if opts.cross_attention_optimization == "Scaled-Dot-Product":
-            shared.log.warning("Scaled dot product cross attention is not available on CPU")
+            shared.log.warning("Cross-attention: Scaled dot product is not available on CPU")
             can_use_sdp = False
         if opts.cross_attention_optimization == "xFormers":
-            shared.log.warning("xFormers cross attention is not available on CPU")
+            shared.log.warning("Cross-attention: xFormers is not available on CPU")
             shared.xformers_available = False
 
-    if opts.cross_attention_optimization == "Disable cross-attention layer optimization":
-        shared.log.warning("Cross-attention optimization disabled")
+    shared.log.info(f"Cross-attention: optimization={opts.cross_attention_optimization} options={opts.cross_attention_options}")
+    if opts.cross_attention_optimization == "Disabled":
         optimization_method = 'none'
     if can_use_sdp and opts.cross_attention_optimization == "Scaled-Dot-Product" and 'SDP disable memory attention' in opts.cross_attention_options:
-        shared.log.info("Applying scaled dot product cross attention optimization (without memory efficient attention)")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.scaled_dot_product_no_mem_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sd_hijack_optimizations.sdp_no_mem_attnblock_forward
         optimization_method = 'sdp-no-mem'
     elif can_use_sdp and opts.cross_attention_optimization == "Scaled-Dot-Product":
-        shared.log.info("Applying scaled dot product cross attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.scaled_dot_product_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sd_hijack_optimizations.sdp_attnblock_forward
         optimization_method = 'sdp'
     if shared.xformers_available and opts.cross_attention_optimization == "xFormers":
-        shared.log.info("Applying xformers cross attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.xformers_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sd_hijack_optimizations.xformers_attnblock_forward
         optimization_method = 'xformers'
     if opts.cross_attention_optimization == "Sub-quadratic":
-        shared.log.info("Applying sub-quadratic cross attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.sub_quad_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sd_hijack_optimizations.sub_quad_attnblock_forward
         optimization_method = 'sub-quadratic'
     if opts.cross_attention_optimization == "Split attention":
-        shared.log.info("Applying split attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.split_cross_attention_forward_v1
         optimization_method = 'v1'
     if opts.cross_attention_optimization == "InvokeAI's":
-        shared.log.info("Applying InvokeAI cross attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.split_cross_attention_forward_invokeAI
         optimization_method = 'invokeai'
     if opts.cross_attention_optimization == "Doggettx's":
-        shared.log.info("Applying Doggettx cross attention optimization")
         ldm.modules.attention.CrossAttention.forward = sd_hijack_optimizations.split_cross_attention_forward
         ldm.modules.diffusionmodules.model.AttnBlock.forward = sd_hijack_optimizations.cross_attention_attnblock_forward
         optimization_method = 'doggettx'
+    current_optimizer.name = optimization_method
     return optimization_method
 
 
@@ -183,13 +178,16 @@ class StableDiffusionModelHijack:
             except Exception as err:
                 shared.log.warning(f"IPEX Optimize not supported: {err}")
 
-        if opts.cuda_compile and opts.cuda_compile_backend != 'none' and shared.backend == shared.Backend.ORIGINAL:
+        if (opts.cuda_compile or opts.cuda_compile_vae or opts.cuda_compile_upscaler) and shared.opts.cuda_compile_backend != 'none' and shared.backend == shared.Backend.ORIGINAL:
             try:
                 import logging
                 shared.log.info(f"Compiling pipeline={m.model.__class__.__name__} mode={opts.cuda_compile_backend}")
                 import torch._dynamo # pylint: disable=unused-import,redefined-outer-name
                 if shared.opts.cuda_compile_backend == "openvino_fx":
-                    from modules.intel.openvino import openvino_fx
+                    torch._dynamo.reset() # pylint: disable=protected-access
+                    from modules.intel.openvino import openvino_fx, openvino_clear_caches # pylint: disable=unused-import, no-name-in-module
+                    openvino_clear_caches()
+                    torch._dynamo.eval_frame.check_if_dynamo_supported = lambda: True # pylint: disable=protected-access
                 log_level = logging.WARNING if opts.cuda_compile_verbose else logging.CRITICAL # pylint: disable=protected-access
                 if hasattr(torch, '_logging'):
                     torch._logging.set_logs(dynamo=log_level, aot=log_level, inductor=log_level) # pylint: disable=protected-access
@@ -197,16 +195,18 @@ class StableDiffusionModelHijack:
                 torch._dynamo.config.suppress_errors = opts.cuda_compile_errors # pylint: disable=protected-access
                 torch.backends.cudnn.benchmark = True
                 if opts.cuda_compile_backend == 'hidet':
-                    import hidet
+                    import hidet # pylint: disable=import-error
                     hidet.torch.dynamo_config.use_tensor_core(True)
                     hidet.torch.dynamo_config.search_space(2)
                 m.model = torch.compile(m.model, mode=opts.cuda_compile_mode, backend=opts.cuda_compile_backend, fullgraph=opts.cuda_compile_fullgraph, dynamic=False)
                 shared.log.info("Model complilation done.")
             except Exception as err:
                 shared.log.warning(f"Model compile not supported: {err}")
+            finally:
+                from installer import setup_logging
+                setup_logging()
 
         self.optimization_method = apply_optimizations()
-
         self.clip = m.cond_stage_model
 
         def flatten(el):
@@ -223,20 +223,16 @@ class StableDiffusionModelHijack:
             return # not ldm model
         if type(m.cond_stage_model) == xlmr.BertSeriesModelWithTransformation:
             m.cond_stage_model = m.cond_stage_model.wrapped
-
         elif type(m.cond_stage_model) == sd_hijack_clip.FrozenCLIPEmbedderWithCustomWords:
             m.cond_stage_model = m.cond_stage_model.wrapped
-
             model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
             if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
                 model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
         elif type(m.cond_stage_model) == sd_hijack_open_clip.FrozenOpenCLIPEmbedderWithCustomWords:
             m.cond_stage_model.wrapped.model.token_embedding = m.cond_stage_model.wrapped.model.token_embedding.wrapped
             m.cond_stage_model = m.cond_stage_model.wrapped
-
         undo_optimizations()
         undo_weighted_forward(m)
-
         self.apply_circular(False)
         self.layers = None
         self.clip = None
@@ -244,9 +240,7 @@ class StableDiffusionModelHijack:
     def apply_circular(self, enable):
         if self.circular_enabled == enable:
             return
-
         self.circular_enabled = enable
-
         for layer in [layer for layer in self.layers if type(layer) == torch.nn.Conv2d]:
             layer.padding_mode = 'circular' if enable else 'zeros'
 
@@ -315,5 +309,4 @@ ldm.models.diffusion.ddim.DDIMSampler.register_buffer = register_buffer
 ldm.models.diffusion.plms.PLMSSampler.register_buffer = register_buffer
 
 # Ensure samping from Guassian for DDPM follows types
-if not devices.backend == 'ipex':
-    ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample = lambda self: self.mean.to(self.parameters.dtype) + self.std.to(self.parameters.dtype) * torch.randn(self.mean.shape, dtype=self.parameters.dtype).to(device=self.parameters.device)
+ldm.modules.distributions.distributions.DiagonalGaussianDistribution.sample = lambda self: self.mean.to(self.parameters.dtype) + self.std.to(self.parameters.dtype) * torch.randn(self.mean.shape, dtype=self.parameters.dtype).to(device=self.parameters.device)

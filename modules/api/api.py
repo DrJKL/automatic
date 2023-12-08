@@ -2,14 +2,14 @@ import io
 import time
 import base64
 from io import BytesIO
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from threading import Lock
 from secrets import compare_digest
-from fastapi import FastAPI, APIRouter, Depends
+from fastapi import FastAPI, APIRouter, Depends, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.exceptions import HTTPException
 from PIL import PngImagePlugin,Image
-
+import requests
 import piexif
 import piexif.helper
 import gradio as gr
@@ -22,7 +22,6 @@ from modules.textual_inversion.preprocess import preprocess
 from modules.hypernetworks.hypernetwork import create_hypernetwork, train_hypernetwork
 from modules.sd_models import checkpoints_list, unload_model_weights, reload_model_weights
 from modules.sd_models_config import find_checkpoint_config_near_filename
-from modules.realesrgan_model import get_realesrgan_models
 from modules import devices
 
 errors.install()
@@ -130,8 +129,7 @@ class Api:
         self.add_api_route("/sdapi/v1/sd-models", self.get_sd_models, methods=["GET"], response_model=List[models.SDModelItem])
         self.add_api_route("/sdapi/v1/hypernetworks", self.get_hypernetworks, methods=["GET"], response_model=List[models.HypernetworkItem])
         self.add_api_route("/sdapi/v1/face-restorers", self.get_face_restorers, methods=["GET"], response_model=List[models.FaceRestorerItem])
-        self.add_api_route("/sdapi/v1/realesrgan-models", self.get_realesrgan_models, methods=["GET"], response_model=List[models.RealesrganItem])
-        self.add_api_route("/sdapi/v1/prompt-styles", self.get_prompt_styles, methods=["GET"], response_model=List[models.PromptStyleItem])
+        self.add_api_route("/sdapi/v1/prompt-styles", self.get_prompt_styles, methods=["GET"], response_model=List[models.StyleItem])
         self.add_api_route("/sdapi/v1/embeddings", self.get_embeddings, methods=["GET"], response_model=models.EmbeddingsResponse)
         self.add_api_route("/sdapi/v1/refresh-checkpoints", self.refresh_checkpoints, methods=["POST"])
         self.add_api_route("/sdapi/v1/sd-vae", self.get_sd_vaes, methods=["GET"], response_model=List[models.SDVaeItem])
@@ -147,16 +145,20 @@ class Api:
         self.add_api_route("/sdapi/v1/reload-checkpoint", self.reloadapi, methods=["POST"])
         self.add_api_route("/sdapi/v1/scripts", self.get_scripts_list, methods=["GET"], response_model=models.ScriptsList)
         self.add_api_route("/sdapi/v1/script-info", self.get_script_info, methods=["GET"], response_model=List[models.ScriptInfo])
-        self.add_api_route("/sdapi/v1/log", self.get_log_buffer, methods=["GET"], response_model=List) # bypass auth
+        self.add_api_route("/sdapi/v1/log", self.get_log_buffer, methods=["GET"], response_model=List)
+        self.add_api_route("/sdapi/v1/start", self.session_start, methods=["GET"])
+        self.add_api_route("/sdapi/v1/motd", self.get_motd, methods=["GET"], response_model=str)
+        self.add_api_route("/sdapi/v1/extra-networks", self.get_extra_networks, methods=["GET"], response_model=List[models.ExtraNetworkItem])
         self.default_script_arg_txt2img = []
         self.default_script_arg_img2img = []
 
     def add_api_route(self, path: str, endpoint, **kwargs):
-        if shared.cmd_opts.auth or shared.cmd_opts.auth_file:
+        if (shared.cmd_opts.auth or shared.cmd_opts.auth_file) and shared.cmd_opts.api_only:
             return self.app.add_api_route(path, endpoint, dependencies=[Depends(self.auth)], **kwargs)
         return self.app.add_api_route(path, endpoint, **kwargs)
 
     def auth(self, credentials: HTTPBasicCredentials = Depends(HTTPBasic())):
+        # this is only needed for api-only since otherwise auth is handled in gradio/routes.py
         if credentials.username in self.credentials:
             if compare_digest(credentials.password, self.credentials[credentials.username]):
                 return True
@@ -167,6 +169,26 @@ class Api:
         if req.clear:
             shared.log.buffer.clear()
         return lines
+
+    def session_start(self, req: Request, agent: Optional[str] = None):
+        token = req.cookies.get("access-token") or req.cookies.get("access-token-unsecure")
+        user = self.app.tokens.get(token)
+        shared.log.info(f'Browser session: user={user} client={req.client.host} agent={agent}')
+        return {}
+
+    def get_motd(self):
+        from installer import get_version
+        motd = ''
+        ver = get_version()
+        if ver.get('updated', None) is not None:
+            motd = f"version <b>{ver['hash']} {ver['updated']}</b> <span style='color: var(--primary-500)'>{ver['url'].split('/')[-1]}</span><br>"
+        if shared.opts.motd:
+            res = requests.get('https://vladmandic.github.io/automatic/motd', timeout=10)
+            if res.status_code == 200:
+                msg = (res.text or '').strip()
+                shared.log.info(f'MOTD: {msg if len(msg) > 0 else "N/A"}')
+                motd += res.text
+        return motd
 
     def get_selectable_script(self, script_name, script_runner):
         if script_name is None or script_name == "":
@@ -180,10 +202,12 @@ class Api:
         i2ilist = [script.name for script in scripts.scripts_img2img.scripts if script.name is not None]
         return models.ScriptsList(txt2img = t2ilist, img2img = i2ilist)
 
-    def get_script_info(self):
+    def get_script_info(self, script_name: Optional[str] = None):
         res = []
         for script_list in [scripts.scripts_txt2img.scripts, scripts.scripts_img2img.scripts]:
-            res += [script.api_info for script in script_list if script.api_info is not None]
+            for script in script_list:
+                if script.api_info is not None and (script_name is None or script_name == script.api_info.name):
+                    res.append(script.api_info)
         return res
 
     def get_script(self, script_name, script_runner):
@@ -263,7 +287,7 @@ class Api:
             p.scripts = script_runner
             p.outpath_grids = shared.opts.outdir_grids or shared.opts.outdir_txt2img_grids
             p.outpath_samples = shared.opts.outdir_samples or shared.opts.outdir_txt2img_samples
-            shared.state.begin()
+            shared.state.begin('api-txt2img')
             script_args = self.init_script_args(p, txt2imgreq, self.default_script_arg_txt2img, selectable_scripts, selectable_script_idx, script_runner)
             if selectable_scripts is not None:
                 processed = scripts.scripts_txt2img.run(p, *script_args) # Need to pass args as list here
@@ -311,7 +335,7 @@ class Api:
             p.scripts = script_runner
             p.outpath_grids = shared.opts.outdir_img2img_grids
             p.outpath_samples = shared.opts.outdir_img2img_samples
-            shared.state.begin()
+            shared.state.begin('api-img2img')
             script_args = self.init_script_args(p, img2imgreq, self.default_script_arg_img2img, selectable_scripts, selectable_script_idx, script_runner)
             if selectable_scripts is not None:
                 processed = scripts.scripts_img2img.run(p, *script_args) # Need to pass args as list here
@@ -335,68 +359,53 @@ class Api:
 
     def extras_batch_images_api(self, req: models.ExtrasBatchImagesRequest):
         reqDict = setUpscalers(req)
-
         image_list = reqDict.pop('imageList', [])
         image_folder = [decode_base64_to_image(x.data) for x in image_list]
-
         with self.queue_lock:
             result = postprocessing.run_extras(extras_mode=1, image_folder=image_folder, image="", input_dir="", output_dir="", save_output=False, **reqDict)
-
         return models.ExtrasBatchImagesResponse(images=list(map(encode_pil_to_base64, result[0])), html_info=result[1])
 
     def pnginfoapi(self, req: models.PNGInfoRequest):
         if not req.image.strip():
             return models.PNGInfoResponse(info="")
-
         image = decode_base64_to_image(req.image.strip())
         if image is None:
             return models.PNGInfoResponse(info="")
-
         geninfo, items = images.read_info_from_image(image)
         if geninfo is None:
             geninfo = ""
-
         items = {**{'parameters': geninfo}, **items}
-
         return models.PNGInfoResponse(info=geninfo, items=items)
 
     def progressapi(self, req: models.ProgressRequest = Depends()):
-        # copy from check_progress_call of ui.py
-
         if shared.state.job_count == 0:
             return models.ProgressResponse(progress=0, eta_relative=0, state=shared.state.dict(), textinfo=shared.state.textinfo)
 
-        # avoid dividing zero
-        progress = 0.01
-
-        if shared.state.job_count > 0:
-            progress += shared.state.job_no / shared.state.job_count
-        if shared.state.sampling_steps > 0:
-            progress += 1 / shared.state.job_count * shared.state.sampling_step / shared.state.sampling_steps
-
-        time_since_start = time.time() - shared.state.time_start
-        eta = time_since_start / progress
-        eta_relative = eta-time_since_start
-
-        progress = min(progress, 1)
-
         shared.state.set_current_image()
-
         current_image = None
         if shared.state.current_image and not req.skip_current_image:
             current_image = encode_pil_to_base64(shared.state.current_image)
 
-        return models.ProgressResponse(progress=progress, eta_relative=eta_relative, state=shared.state.dict(), current_image=current_image, textinfo=shared.state.textinfo)
+        batch_x = max(shared.state.job_no, 0)
+        batch_y = max(shared.state.job_count, 1)
+        step_x = max(shared.state.sampling_step, 0)
+        step_y = max(shared.state.sampling_steps, 1)
+        current = step_y * batch_x + step_x
+        total = step_y * batch_y
+        progress = current / total if current > 0 and total > 0 else 0
+        time_since_start = time.time() - shared.state.time_start
+        eta_relative = (time_since_start / progress) - time_since_start if progress > 0 else 0
+
+        res = models.ProgressResponse(progress=progress, eta_relative=eta_relative, state=shared.state.dict(), current_image=current_image, textinfo=shared.state.textinfo)
+        return res
+
 
     def interrogateapi(self, interrogatereq: models.InterrogateRequest):
         image_b64 = interrogatereq.image
         if image_b64 is None:
             raise HTTPException(status_code=404, detail="Image not found")
-
         img = decode_base64_to_image(image_b64)
         img = img.convert('RGB')
-
-        # Override object param
         with self.queue_lock:
             if interrogatereq.model == "clip":
                 processed = shared.interrogator.interrogate(img)
@@ -404,7 +413,6 @@ class Api:
                 processed = deepbooru.model.tag(img)
             else:
                 raise HTTPException(status_code=404, detail="Model not found")
-
         return models.InterrogateResponse(caption=processed)
 
     def interruptapi(self):
@@ -452,21 +460,11 @@ class Api:
     def get_sd_vaes(self):
         return [{"model_name": x, "filename": vae_dict[x]} for x in vae_dict.keys()]
 
-
     def get_upscalers(self):
-        return [
-            {
-                "name": upscaler.name,
-                "model_name": upscaler.scaler.model_name,
-                "model_path": upscaler.data_path,
-                "model_url": None,
-                "scale": upscaler.scale,
-            }
-            for upscaler in shared.sd_upscalers
-        ]
+        return [{"name": upscaler.name, "model_name": upscaler.scaler.model_name, "model_path": upscaler.data_path, "model_url": None, "scale": upscaler.scale} for upscaler in shared.sd_upscalers]
 
     def get_sd_models(self):
-        return [{"title": x.title, "model_name": x.model_name, "hash": x.shorthash, "sha256": x.sha256, "filename": x.filename, "config": find_checkpoint_config_near_filename(x)} for x in checkpoints_list.values()]
+        return [{"title": x.title, "name": x.name, "filename": x.filename, "type": x.type, "hash": x.shorthash, "sha256": x.sha256, "config": find_checkpoint_config_near_filename(x)} for x in checkpoints_list.values()]
 
     def get_hypernetworks(self):
         return [{"name": name, "path": shared.hypernetworks[name]} for name in shared.hypernetworks]
@@ -474,36 +472,45 @@ class Api:
     def get_face_restorers(self):
         return [{"name":x.name(), "cmd_dir": getattr(x, "cmd_dir", None)} for x in shared.face_restorers]
 
-    def get_realesrgan_models(self):
-        return [{"name":x.name,"path":x.data_path, "scale":x.scale} for x in get_realesrgan_models(None)]
-
     def get_prompt_styles(self):
-        styleList = []
-        for k in shared.prompt_styles.styles:
-            style = shared.prompt_styles.styles[k]
-            styleList.append({"name":style[0], "prompt": style[1], "negative_prompt": style[2]})
-
-        return styleList
+        return [{ 'name': v.name, 'prompt': v.prompt, 'negative_prompt': v.negative_prompt, 'extra': v.extra, 'filename': v.filename, 'preview': v.preview} for v in shared.prompt_styles.styles.values()]
 
     def get_embeddings(self):
         db = sd_hijack.model_hijack.embedding_db
-
         def convert_embedding(embedding):
-            return {
-                "step": embedding.step,
-                "sd_checkpoint": embedding.sd_checkpoint,
-                "sd_checkpoint_name": embedding.sd_checkpoint_name,
-                "shape": embedding.shape,
-                "vectors": embedding.vectors,
-            }
+            return {"step": embedding.step, "sd_checkpoint": embedding.sd_checkpoint, "sd_checkpoint_name": embedding.sd_checkpoint_name, "shape": embedding.shape, "vectors": embedding.vectors}
 
         def convert_embeddings(embeddings):
             return {embedding.name: convert_embedding(embedding) for embedding in embeddings.values()}
 
-        return {
-            "loaded": convert_embeddings(db.word_embeddings),
-            "skipped": convert_embeddings(db.skipped_embeddings),
-        }
+        return {"loaded": convert_embeddings(db.word_embeddings), "skipped": convert_embeddings(db.skipped_embeddings)}
+
+    def get_extra_networks(self, page: Optional[str] = None, name: Optional[str] = None, filename: Optional[str] = None, title: Optional[str] = None, fullname: Optional[str] = None, hash: Optional[str] = None): # pylint: disable=redefined-builtin
+        res = []
+        for pg in shared.extra_networks:
+            if page is not None and pg.name != page.lower():
+                continue
+            for item in pg.items:
+                if name is not None and item.get('name', '') != name:
+                    continue
+                if title is not None and item.get('title', '') != title:
+                    continue
+                if filename is not None and item.get('filename', '') != filename:
+                    continue
+                if fullname is not None and item.get('fullname', '') != fullname:
+                    continue
+                if hash is not None and (item.get('shorthash', None) or item.get('hash')) != hash:
+                    continue
+                res.append({
+                    'name': item.get('name', ''),
+                    'type': pg.name,
+                    'title': item.get('title', None),
+                    'fullname': item.get('fullname', None),
+                    'filename': item.get('filename', None),
+                    'hash': item.get('shorthash', None) or item.get('hash'),
+                    "preview": item.get('preview', None),
+                })
+        return res
 
     def refresh_checkpoints(self):
         return shared.refresh_checkpoints()
@@ -513,7 +520,7 @@ class Api:
 
     def create_embedding(self, args: dict):
         try:
-            shared.state.begin()
+            shared.state.begin('api-embedding')
             filename = create_embedding(**args) # create empty embedding
             sd_hijack.model_hijack.embedding_db.load_textual_inversion_embeddings() # reload embeddings so new one can be immediately used
             shared.state.end()
@@ -524,7 +531,7 @@ class Api:
 
     def create_hypernetwork(self, args: dict):
         try:
-            shared.state.begin()
+            shared.state.begin('api-hypernetwork')
             filename = create_hypernetwork(**args) # create empty embedding # pylint: disable=E1111
             shared.state.end()
             return models.CreateResponse(info = f"create hypernetwork filename: {filename}")
@@ -534,7 +541,7 @@ class Api:
 
     def preprocess(self, args: dict):
         try:
-            shared.state.begin()
+            shared.state.begin('api-preprocess')
             preprocess(**args) # quick operation unless blip/booru interrogation is enabled
             shared.state.end()
             return models.PreprocessResponse(info = 'preprocess complete')
@@ -550,7 +557,7 @@ class Api:
 
     def train_embedding(self, args: dict):
         try:
-            shared.state.begin()
+            shared.state.begin('api-embedding')
             apply_optimizations = False
             error = None
             filename = ''
@@ -571,7 +578,7 @@ class Api:
 
     def train_hypernetwork(self, args: dict):
         try:
-            shared.state.begin()
+            shared.state.begin('api-hypernetwork')
             shared.loaded_hypernetworks = []
             apply_optimizations = False
             error = None

@@ -7,8 +7,6 @@ let img2img_textarea;
 const wait_time = 800;
 const token_timeouts = {};
 let uiLoaded = false;
-let opts_metadata = {};
-const opts_tabs = {};
 
 function rememberGallerySelection(name) {
   // dummy
@@ -27,7 +25,7 @@ function update_token_counter(button_id) {
 function clip_gallery_urls(gallery) {
   const files = gallery.map((v) => v.data);
   navigator.clipboard.writeText(JSON.stringify(files)).then(
-    () => console.log('clipboard:', files),
+    () => log('clipboard:', files),
     (err) => console.error('clipboard:', files, err),
   );
 }
@@ -145,8 +143,8 @@ function clearGallery(tabname) {
   footer.style.display = 'flex';
 }
 
-function submit(...args) {
-  console.log('submitTxt');
+function submit_txt2img(...args) {
+  log('submitTxt');
   clearGallery('txt2img');
   const id = randomId();
   requestProgress(id, null, gradioApp().getElementById('txt2img_gallery'));
@@ -156,7 +154,7 @@ function submit(...args) {
 }
 
 function submit_img2img(...args) {
-  console.log('submitImg');
+  log('submitImg');
   clearGallery('img2img');
   const id = randomId();
   requestProgress(id, null, gradioApp().getElementById('img2img_gallery'));
@@ -167,10 +165,12 @@ function submit_img2img(...args) {
 }
 
 function submit_postprocessing(...args) {
-  console.log('SubmitExtras');
+  log('SubmitExtras');
   clearGallery('extras');
   return args;
 }
+
+window.submit = submit_txt2img;
 
 function modelmerger(...args) {
   const id = randomId();
@@ -179,12 +179,7 @@ function modelmerger(...args) {
   return res;
 }
 
-function ask_for_style_name(_, prompt_text, negative_prompt_text) {
-  const name = prompt('Style name:'); // eslint-disable-line no-alert
-  return [name, prompt_text, negative_prompt_text];
-}
-
-function confirm_clear_prompt(prompt, negative_prompt) {
+function clearPrompts(prompt, negative_prompt) {
   prompt = '';
   negative_prompt = '';
   return [prompt, negative_prompt];
@@ -216,7 +211,7 @@ function recalculate_prompts_inpaint(...args) {
   return Array.from(arguments);
 }
 
-function register_drag_drop() {
+function registerDragDrop() {
   const qs = gradioApp().getElementById('quicksettings');
   if (!qs) return;
   qs.addEventListener('dragover', (evt) => {
@@ -227,48 +222,8 @@ function register_drag_drop() {
     evt.preventDefault();
     evt.dataTransfer.dropEffect = 'copy';
     for (const f of evt.dataTransfer.files) {
-      console.log('QuickSettingsDrop', f);
+      log('QuickSettingsDrop', f);
     }
-  });
-}
-
-const monitoredOpts = [
-  { sd_model_checkpoint: null },
-  {
-    sd_backend: () => {
-      gradioApp().getElementById('refresh_sd_model_checkpoint')?.click();
-    },
-  },
-];
-
-function updateOpts(json_string) {
-  const settings_data = JSON.parse(json_string);
-  for (const op of monitoredOpts) {
-    const key = Object.keys(op)[0];
-    const callback = op[key];
-    if (opts[key] && opts[key] !== settings_data.values[key]) {
-      console.log('updateOpts', key, opts[key], settings_data.values[key]);
-      if (callback) callback();
-    }
-  }
-  opts = settings_data.values;
-  opts_metadata = settings_data.metadata;
-  Object.entries(opts_metadata).forEach(([opt, meta]) => {
-    if (!opts_tabs[meta.tab_name]) opts_tabs[meta.tab_name] = {};
-    if (!opts_tabs[meta.tab_name].unsaved_keys) opts_tabs[meta.tab_name].unsaved_keys = new Set();
-    if (!meta.is_stored) opts_tabs[meta.tab_name].unsaved_keys.add(opt);
-  });
-}
-
-function showAllSettings() {
-  // Try to ensure that the show all settings tab is opened by clicking on its tab button
-  const tab_dirty_indicator = gradioApp().getElementById('modification_indicator_show_all_pages');
-  if (tab_dirty_indicator && tab_dirty_indicator.nextSibling) {
-    tab_dirty_indicator.nextSibling.click();
-  }
-  gradioApp().querySelectorAll('#settings > .tab-content > .tabitem').forEach((elem) => {
-    if (elem.id === 'settings_tab_licenses' || elem.id === 'settings_show_all_pages') return;
-    elem.style.display = 'block';
   });
 }
 
@@ -299,72 +254,15 @@ function sortUIElements() {
 
   const scriptsImg = gradioApp().getElementById('scripts_alwayson_img2img').children;
   for (const el of Array.from(scriptsImg)) el.style.order = find(el, tabsOrder);
-  console.log('sortUIElements');
-}
-
-function markIfModified(setting_name, value) {
-  const elem = gradioApp().getElementById(`modification_indicator_${setting_name}`);
-  if (elem == null) return;
-  // Use JSON.stringify to compare nested objects (e.g. arrays for checkbox-groups)
-  const previous_value_json = JSON.stringify(opts[setting_name]);
-  const changed_value = JSON.stringify(value) !== previous_value_json;
-  if (changed_value) {
-    elem.title = `Click to revert to previous value: ${previous_value_json}`;
-  }
-
-  const is_unsaved = !opts_metadata[setting_name].is_stored;
-  if (is_unsaved) {
-    elem.title = 'Default value (not saved to config)';
-  }
-  elem.disabled = !(is_unsaved || changed_value);
-  elem.classList.toggle('changed', changed_value);
-  elem.classList.toggle('unsaved', is_unsaved);
-
-  const { tab_name } = opts_metadata[setting_name];
-  if (!opts_tabs[tab_name].changed) opts_tabs[tab_name].changed = new Set();
-  const changed_items = opts_tabs[tab_name].changed;
-  if (changed_value) changed_items.add(setting_name);
-  else changed_items.delete(setting_name);
-  const unsaved = opts_tabs[tab_name].unsaved_keys;
-
-  // Set the indicator on the tab nav element
-  const tab_nav_indicator = gradioApp().getElementById(`modification_indicator_${tab_name}`);
-  tab_nav_indicator.disabled = (changed_items.size === 0) && (unsaved.size === 0);
-  tab_nav_indicator.title = '';
-  tab_nav_indicator.classList.toggle('changed', changed_items.size > 0);
-  tab_nav_indicator.classList.toggle('unsaved', unsaved.size > 0);
-  if (changed_items.size > 0) { tab_nav_indicator.title += `Click to reset ${changed_items.size} unapplied change${changed_items.size > 1 ? 's' : ''} in this tab.\n`; }
-  if (unsaved.size > 0) { tab_nav_indicator.title += `${unsaved.size} new default value${unsaved.size > 1 ? 's' : ''} (not yet saved).`; }
+  log('sortUIElements');
 }
 
 onAfterUiUpdate(async () => {
-  sortUIElements();
-  if (Object.keys(opts).length !== 0) return;
-  const json_elem = gradioApp().getElementById('settings_json');
-  if (!json_elem) return;
-  json_elem.parentElement.style.display = 'none';
-  const textarea = json_elem.querySelector('textarea');
-  const jsdata = textarea.value;
-  updateOpts(jsdata);
-  executeCallbacks(optionsChangedCallbacks);
-  register_drag_drop();
+  let promptsInitialized = false;
 
-  Object.defineProperty(textarea, 'value', {
-    set(newValue) {
-      const valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-      const oldValue = valueProp.get.call(textarea);
-      valueProp.set.call(textarea, newValue);
-      if (oldValue !== newValue) updateOpts(textarea.value);
-      executeCallbacks(optionsChangedCallbacks);
-    },
-    get() {
-      const valueProp = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
-      return valueProp.get.call(textarea);
-    },
-  });
-
-  function registerTextarea(id, id_counter, id_button) {
+  async function registerTextarea(id, id_counter, id_button) {
     const prompt = gradioApp().getElementById(id);
+    if (!prompt) return;
     const counter = gradioApp().getElementById(id_counter);
     const localTextarea = gradioApp().querySelector(`#${id} > label > textarea`);
     if (counter.parentElement === prompt.parentElement) return;
@@ -372,85 +270,15 @@ onAfterUiUpdate(async () => {
     prompt.parentElement.style.position = 'relative';
     promptTokecountUpdateFuncs[id] = () => { update_token_counter(id_button); };
     localTextarea.addEventListener('input', promptTokecountUpdateFuncs[id]);
+    if (!promptsInitialized) log('initPrompts');
+    promptsInitialized = true;
   }
 
+  // sortUIElements();
   registerTextarea('txt2img_prompt', 'txt2img_token_counter', 'txt2img_token_button');
   registerTextarea('txt2img_neg_prompt', 'txt2img_negative_token_counter', 'txt2img_negative_token_button');
   registerTextarea('img2img_prompt', 'img2img_token_counter', 'img2img_token_button');
   registerTextarea('img2img_neg_prompt', 'img2img_negative_token_counter', 'img2img_negative_token_button');
-
-  const settings_search = gradioApp().querySelectorAll('#settings_search > label > textarea')[0];
-  settings_search.oninput = (e) => {
-    setTimeout(() => {
-      showAllSettings();
-      gradioApp().querySelectorAll('#tab_settings .tabitem').forEach((section) => {
-        section.querySelectorAll('.dirtyable').forEach((setting) => {
-          const visible = setting.innerText.toLowerCase().includes(e.target.value.toLowerCase()) || setting.id.toLowerCase().includes(e.target.value.toLowerCase());
-          if (!visible) {
-            setting.style.display = 'none';
-          } else {
-            setting.style.removeProperty('display');
-          }
-        });
-      });
-    }, 50);
-  };
-});
-
-onOptionsChanged(() => {
-  const elem = gradioApp().getElementById('sd_checkpoint_hash');
-  const sd_checkpoint_hash = opts.sd_checkpoint_hash || '';
-  const shorthash = sd_checkpoint_hash.substring(0, 10);
-
-  if (elem && elem.textContent !== shorthash) {
-    elem.textContent = shorthash;
-    elem.title = sd_checkpoint_hash;
-    elem.href = `https://google.com/search?q=${sd_checkpoint_hash}`;
-  }
-});
-
-onOptionsChanged(() => {
-  const setting_elems = gradioApp().querySelectorAll('#settings [id^="setting_"]');
-  setting_elems.forEach((elem) => {
-    const setting_name = elem.id.replace('setting_', '');
-    markIfModified(setting_name, opts[setting_name]);
-  });
-});
-
-onUiLoaded(() => {
-  const tab_nav_element = gradioApp().querySelector('#settings > .tab-nav');
-  const tab_nav_buttons = gradioApp().querySelectorAll('#settings > .tab-nav > button');
-  const tab_elements = gradioApp().querySelectorAll('#settings > div:not(.tab-nav)');
-
-  // HACK Add mutation observer to keep gradio from closing setting tabs when showing all pages
-  const observer = new MutationObserver((mutations) => {
-    const show_all_pages_dummy = gradioApp().getElementById('settings_show_all_pages');
-    if (show_all_pages_dummy.style.display === 'none') { return; }
-    function mutation_on_style(mut) {
-      return mut.type === 'attributes' && mut.attributeName === 'style';
-    }
-    if (mutations.some(mutation_on_style)) {
-      showAllSettings();
-    }
-  });
-
-  // Add a wrapper for the tab content (everything but the tab nav)
-  const tab_content_wrapper = document.createElement('div');
-  tab_content_wrapper.className = 'tab-content';
-  tab_nav_element.parentElement.insertBefore(tab_content_wrapper, tab_nav_element.nextSibling);
-
-  tab_elements.forEach((elem, index) => {
-    // Move the modification indicator to the toplevel tab button
-    const tab_name = elem.id.replace('settings_', '');
-    const indicator = gradioApp().getElementById(`modification_indicator_${tab_name}`);
-    tab_nav_element.insertBefore(indicator, tab_nav_buttons[index]);
-
-    // Add the tab content to the wrapper
-    tab_content_wrapper.appendChild(elem);
-
-    // Add the mutation observer to the tab element
-    observer.observe(elem, { attributes: true, attributeFilter: ['style'] });
-  });
 });
 
 function update_txt2img_tokens(...args) {
@@ -469,7 +297,7 @@ function getTranslation(...args) {
   return null;
 }
 
-function monitor_server_status() {
+function monitorServerStatus() {
   document.open();
   document.write(`
     <html>
@@ -477,12 +305,12 @@ function monitor_server_status() {
       <body style="background: #222222; font-size: 1rem; font-family:monospace; margin-top:20%; color:lightgray; text-align:center">
         <h1>Waiting for server...</h1>
         <script>
-          function monitor_server_status() {
+          function monitorServerStatus() {
             fetch('/sdapi/v1/progress')
-              .then((res) => { !res?.ok ? setTimeout(monitor_server_status, 1000) : location.reload(); })
-              .catch((e) => setTimeout(monitor_server_status, 1000))
+              .then((res) => { !res?.ok ? setTimeout(monitorServerStatus, 1000) : location.reload(); })
+              .catch((e) => setTimeout(monitorServerStatus, 1000))
           }
-          window.onload = () => monitor_server_status();
+          window.onload = () => monitorServerStatus();
         </script>
       </body>
     </html>
@@ -490,12 +318,12 @@ function monitor_server_status() {
   document.close();
 }
 
-function restart_reload() {
+function restartReload() {
   document.body.style = 'background: #222222; font-size: 1rem; font-family:monospace; margin-top:20%; color:lightgray; text-align:center';
   document.body.innerHTML = '<h1>Server shutdown in progress...</h1>';
   fetch('/sdapi/v1/progress')
-    .then((res) => setTimeout(restart_reload, 1000))
-    .catch((e) => setTimeout(monitor_server_status, 500));
+    .then((res) => setTimeout(restartReload, 1000))
+    .catch((e) => setTimeout(monitorServerStatus, 500));
   return [];
 }
 
@@ -508,7 +336,24 @@ function updateInput(target) {
 let desiredCheckpointName = null;
 function selectCheckpoint(name) {
   desiredCheckpointName = name;
-  gradioApp().getElementById('change_checkpoint').click();
+  const tabname = getENActiveTab();
+  const btnModel = gradioApp().getElementById(`${tabname}_extra_model`);
+  const isRefiner = btnModel && btnModel.classList.contains('toolbutton-selected');
+  if (isRefiner) gradioApp().getElementById('change_refiner').click();
+  else gradioApp().getElementById('change_checkpoint').click();
+  log(`Change ${isRefiner ? 'refiner' : 'model'}: ${desiredCheckpointName}`);
+}
+
+let desiredVAEName = null;
+function selectVAE(name) {
+  desiredVAEName = name;
+  gradioApp().getElementById('change_vae').click();
+  log(`Change VAE: ${desiredVAEName}`);
+}
+
+function selectReference(name) {
+  desiredCheckpointName = name;
+  gradioApp().getElementById('change_reference').click();
 }
 
 function currentImg2imgSourceResolution(_a, _b, scaleBy) {
@@ -521,7 +366,7 @@ function updateImg2imgResizeToTextAfterChangingImage() {
   return [];
 }
 
-function create_theme_element() {
+function createThemeElement() {
   const el = document.createElement('img');
   el.id = 'theme-preview';
   el.className = 'theme-preview';
@@ -530,31 +375,53 @@ function create_theme_element() {
   return el;
 }
 
-async function preview_theme() {
-  let name = gradioApp().getElementById('setting_gradio_theme').querySelectorAll('input')?.[0].value || '';
-  const res = await fetch('/file=html/themes.json');
-  const themes = await res.json();
-  const theme = themes.find((t) => t.id === name);
-  if (theme) {
-    window.open(theme.subdomain, '_blank');
+function toggleCompact(val) {
+  // log('toggleCompact', val);
+  if (val) {
+    gradioApp().style.setProperty('--layout-gap', 'var(--spacing-md)');
+    gradioApp().querySelectorAll('input[type=range]').forEach((el) => el.classList.add('hidden'));
+    gradioApp().querySelectorAll('div .form').forEach((el) => el.classList.add('form-compact'));
+    gradioApp().querySelectorAll('.small-accordion .label-wrap').forEach((el) => el.classList.add('accordion-compact'));
   } else {
-    const el = document.getElementById('theme-preview') || create_theme_element();
-    el.style.display = el.style.display === 'block' ? 'none' : 'block';
-    name = name.replace('/', '-');
-    el.src = `/file=html/${name}.jpg`;
+    gradioApp().style.setProperty('--layout-gap', 'var(--spacing-xxl)');
+    gradioApp().querySelectorAll('input[type=range]').forEach((el) => el.classList.remove('hidden'));
+    gradioApp().querySelectorAll('div .form').forEach((el) => el.classList.remove('form-compact'));
+    gradioApp().querySelectorAll('.small-accordion .label-wrap').forEach((el) => el.classList.remove('accordion-compact'));
   }
 }
 
-function reconnectUI() {
+function previewTheme() {
+  let name = gradioApp().getElementById('setting_gradio_theme').querySelectorAll('input')?.[0].value || '';
+  fetch('/file=html/themes.json').then((res) => {
+    res.json().then((themes) => {
+      const theme = themes.find((t) => t.id === name);
+      if (theme) {
+        window.open(theme.subdomain, '_blank');
+      } else {
+        const el = document.getElementById('theme-preview') || createThemeElement();
+        el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        name = name.replace('/', '-');
+        el.src = `/file=html/${name}.jpg`;
+      }
+    });
+  });
+}
+
+async function browseFolder() {
+  const f = await window.showDirectoryPicker();
+  if (f && f.kind === 'directory') return f.name;
+  return null;
+}
+
+async function reconnectUI() {
+  const gallery = gradioApp().getElementById('txt2img_gallery');
+  if (!gallery) return;
+  const task_id = localStorage.getItem('task');
   const api_logo = Array.from(gradioApp().querySelectorAll('img')).filter((el) => el?.src?.endsWith('api-logo.svg'));
   if (api_logo.length > 0) api_logo[0].remove();
-
-  const gallery = gradioApp().getElementById('txt2img_gallery');
-  const task_id = localStorage.getItem('task');
-  if (!gallery) return;
   clearInterval(start_check); // eslint-disable-line no-use-before-define
   if (task_id) {
-    console.debug('task check:', task_id);
+    debug('task check:', task_id);
     requestProgress(task_id, null, gallery, null, null, true);
   }
   uiLoaded = true;
@@ -578,7 +445,7 @@ function reconnectUI() {
   };
   const sd_model_observer = new MutationObserver(sd_model_callback);
   sd_model_observer.observe(sd_model, { attributes: true, childList: true, subtree: true });
-  console.log('reconnectUI');
+  log('reconnectUI');
 }
 
-const start_check = setInterval(reconnectUI, 50);
+const start_check = setInterval(reconnectUI, 100);

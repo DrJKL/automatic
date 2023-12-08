@@ -30,20 +30,15 @@ async function tooltipHide(e) {
 
 async function validateHints(elements, data) {
   let original = elements.map((e) => e.textContent.toLowerCase().trim()).sort((a, b) => a > b);
-  original = [...new Set(original)];
-  console.log('all hints:', original);
-  console.log('hints-differences', { elements: original.length, hints: data.length });
+  original = [...new Set(original)]; // remove duplicates
   const current = data.map((e) => e.label.toLowerCase().trim()).sort((a, b) => a > b);
-  let missing = [];
-  for (let i = 0; i < original.length; i++) {
-    if (!current.includes(original[i])) missing.push(original[i]);
-  }
-  console.log('missing in locale:', missing);
-  missing = [];
-  for (let i = 0; i < current.length; i++) {
-    if (!original.includes(current[i])) missing.push(current[i]);
-  }
-  console.log('in locale but not ui:', missing);
+  log('all elements:', original);
+  log('all hints:', current);
+  log('hints-differences', { elements: original.length, hints: current.length });
+  const missingLocale = original.filter((e) => !current.includes(e));
+  log('missing in locale:', missingLocale);
+  const missingUI = current.filter((e) => !original.includes(e));
+  log('in locale but not ui:', missingUI);
 }
 
 async function setHints() {
@@ -51,7 +46,8 @@ async function setHints() {
   if (localeData.data.length === 0) {
     const res = await fetch('/file=html/locale_en.json');
     const json = await res.json();
-    localeData.data = Object.values(json).flat();
+    localeData.data = Object.values(json).flat().filter((e) => e.hint.length > 0);
+    for (const e of localeData.data) e.label = e.label.toLowerCase().trim();
   }
   const elements = [
     ...Array.from(gradioApp().querySelectorAll('button')),
@@ -65,7 +61,7 @@ async function setHints() {
   localeData.finished = true;
   const t0 = performance.now();
   for (const el of elements) {
-    const found = localeData.data.find((l) => l.label === el.textContent.trim());
+    const found = localeData.data.find((l) => l.label === el.textContent.toLowerCase().trim());
     if (found?.localized?.length > 0) {
       localized++;
       el.textContent = found.localized;
@@ -84,9 +80,10 @@ async function setHints() {
     }
   }
   const t1 = performance.now();
-  console.log('setHints', { type: localeData.type, elements: elements.length, localized, hints, data: localeData.data.length, time: t1 - t0 });
+  log('setHints', { type: localeData.type, elements: elements.length, localized, hints, data: localeData.data.length, time: t1 - t0 });
+  // sortUIElements();
   removeSplash();
-  // validateHints(elements, localeData.data)
+  // validateHints(elements, localeData.data);
 }
 
 onAfterUiUpdate(async () => {

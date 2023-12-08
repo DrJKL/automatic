@@ -1,118 +1,129 @@
-let globalPopup = null;
-let globalPopupInner = null;
 const activePromptTextarea = {};
+let sortVal = 0;
 
-const getENActiveTab = () => gradioApp().getElementById('tab_txt2img').style.display === 'block' ? 'txt2img' : 'img2img';
+// helpers
 
-function requestGet(url, data, handler, errorHandler) {
+const requestGet = (url, data, handler) => {
   const xhr = new XMLHttpRequest();
   const args = Object.keys(data).map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(data[k])}`).join('&');
   xhr.open('GET', `${url}?${args}`, true);
   xhr.onreadystatechange = () => {
     if (xhr.readyState === 4) {
-      if (xhr.status === 200) {
-        try {
-          const js = JSON.parse(xhr.responseText);
-          handler(js);
-        } catch (error) {
-          console.error(error);
-          errorHandler();
-        }
-      } else {
-        errorHandler();
-      }
+      if (xhr.status === 200) handler(JSON.parse(xhr.responseText));
+      else console.error(`Request: url=${url} status=${xhr.status} err`);
     }
   };
-  const js = JSON.stringify(data);
-  xhr.send(js);
+  xhr.send(JSON.stringify(data));
+};
+
+const getENActiveTab = () => gradioApp().getElementById('tab_txt2img').style.display === 'block' ? 'txt2img' : 'img2img';
+
+const getENActivePage = () => {
+  const tabname = getENActiveTab();
+  const page = gradioApp().querySelector(`#${tabname}_extra_networks > .tabs > .tab-nav > .selected`);
+  const pageName = page ? page.innerText : '';
+  const btnApply = gradioApp().getElementById(`${tabname}_extra_apply`);
+  if (btnApply) btnApply.style.display = pageName === 'Style' ? 'inline-flex' : 'none';
+  return pageName;
+};
+
+const setENState = (state) => {
+  if (!state) return;
+  state.tab = getENActiveTab();
+  state.page = getENActivePage();
+  // log('setENState', state);
+  const el = gradioApp().querySelector(`#${state.tab}_extra_state  > label > textarea`);
+  el.value = JSON.stringify(state);
+  updateInput(el);
+};
+
+// methods
+
+function showCardDetails(event) {
+  console.log('showCardDetails', event);
+  const tabname = getENActiveTab();
+  const btn = gradioApp().getElementById(`${tabname}_extra_details_btn`);
+  btn.click();
+  event.stopPropagation();
+  event.preventDefault();
 }
 
-function setupExtraNetworksForTab(tabname) {
-  gradioApp().querySelector(`#${tabname}_extra_tabs`).classList.add('extra-networks');
-  const tabs = gradioApp().querySelector(`#${tabname}_extra_tabs > div`);
-  const search = gradioApp().querySelector(`#${tabname}_extra_search textarea`);
-  const refresh = gradioApp().getElementById(`${tabname}_extra_refresh`);
-  const description = gradioApp().getElementById(`${tabname}_description`);
-  const close = gradioApp().getElementById(`${tabname}_extra_close`);
-  const en = gradioApp().getElementById(`${tabname}_extra_networks`);
-  search.classList.add('search');
-  description.classList.add('description');
-  tabs.appendChild(refresh);
-  tabs.appendChild(close);
-  const div = document.createElement('div');
-  div.classList.add('second-line');
-  tabs.appendChild(div);
-  div.appendChild(search);
-  div.appendChild(description);
-  search.addEventListener('input', (evt) => {
-    const searchTerm = search.value.toLowerCase();
-    gradioApp().querySelectorAll(`#${tabname}_extra_tabs div.card`).forEach((elem) => {
-      let text = `${elem.querySelector('.name').textContent.toLowerCase()} ${elem.querySelector('.search_term').textContent.toLowerCase()}`;
-      text = text.replace('models--', 'Diffusers');
-      elem.style.display = text.indexOf(searchTerm) === -1 ? 'none' : '';
-    });
-  });
+function getCardDetails(...args) {
+  const el = event?.target?.parentElement?.parentElement;
+  if (el?.classList?.contains('card')) setENState({ op: 'getCardDetails', item: el.dataset.name });
+  else setENState({ op: 'getCardDetails', item: null });
+  return [...args];
+}
 
-  const intersectionObserver = new IntersectionObserver((entries) => {
-    if (!en) return;
-    for (const el of Array.from(gradioApp().querySelectorAll('.extra-networks-page'))) el.style.height = `${window.opts.extra_networks_height}vh`;
-    if (entries[0].intersectionRatio > 0) {
-      if (window.opts.extra_networks_card_cover === 'cover') {
-        en.style.transition = '';
-        en.style.zIndex = 9999;
-        en.style.position = 'absolute';
-        en.style.right = 'unset';
-        en.style.width = 'unset';
-        en.style.height = 'unset';
-        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
-      } else if (window.opts.extra_networks_card_cover === 'sidebar') {
-        en.style.transition = 'width 0.2s ease';
-        en.style.zIndex = 0;
-        en.style.position = 'absolute';
-        en.style.right = '0';
-        en.style.width = `${window.opts.extra_networks_sidebar_width}vw`;
-        en.style.height = '-webkit-fill-available';
-        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = `${100 - 2 - window.opts.extra_networks_sidebar_width}vw`;
+function readCardTags(el, tags) {
+  const clickTag = (e, tag) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const textarea = activePromptTextarea[getENActiveTab()];
+    if (textarea.value.indexOf(` ${tag}`) !== -1) textarea.value = textarea.value.replace(` ${tag}`, '');
+    else if (textarea.value.indexOf(`${tag} `) !== -1) textarea.value = textarea.value.replace(` ${tag} `, '');
+    else textarea.value += ` ${tag}`;
+    updateInput(textarea);
+  };
+  if (tags.length === 0) return;
+  const cardTags = tags.split('|');
+  if (!cardTags || cardTags.length === 0) return;
+  const tagsEl = el.getElementsByClassName('tags')[0];
+  if (!tagsEl?.children || tagsEl.children.length > 0) return;
+  for (const tag of cardTags) {
+    const span = document.createElement('span');
+    span.classList.add('tag');
+    span.textContent = tag;
+    span.onclick = (e) => clickTag(e, tag);
+    tagsEl.appendChild(span);
+  }
+}
+
+function readCardDescription(page, item) {
+  requestGet('/sd_extra_networks/description', { page, item }, (data) => {
+    const tabname = getENActiveTab();
+    const description = gradioApp().querySelector(`#${tabname}_description > label > textarea`);
+    description.value = data?.description?.trim() || '';
+    // description.focus();
+    updateInput(description);
+    setENState({ op: 'readCardDescription', page, item });
+  });
+}
+
+async function filterExtraNetworksForTab(tabname, searchTerm) {
+  let found = 0;
+  let items = 0;
+  const t0 = performance.now();
+  const pagename = getENActivePage();
+  if (!pagename) return;
+  const allPages = Array.from(gradioApp().querySelectorAll('.extra-network-cards'));
+  const pages = allPages.filter((el) => el.id.includes(pagename.toLowerCase()));
+  for (const pg of pages) {
+    const cards = Array.from(pg.querySelectorAll('.card') || []);
+    cards.forEach((elem) => {
+      items += 1;
+      if (searchTerm === '') {
+        elem.style.display = '';
       } else {
-        en.style.transition = '';
-        en.style.zIndex = 0;
-        en.style.position = 'relative';
-        en.style.right = 'unset';
-        en.style.width = 'unset';
-        en.style.height = 'unset';
-        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
+        let text = elem.dataset.search.toLowerCase();
+        text = text.toLowerCase().replace('models--', 'Diffusers').replace('\\', '/');
+        if (text.indexOf(searchTerm) === -1) {
+          elem.style.display = 'none';
+        } else {
+          elem.style.display = '';
+          found += 1;
+        }
       }
-    } else {
-      en.style.width = 0;
-      gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
-    }
-  });
-  intersectionObserver.observe(en); // monitor visibility of
-}
-
-function setupExtraNetworks() {
-  setupExtraNetworksForTab('txt2img');
-  setupExtraNetworksForTab('img2img');
-
-  function registerPrompt(tabname, id) {
-    const textarea = gradioApp().querySelector(`#${id} > label > textarea`);
-    if (!activePromptTextarea[tabname]) activePromptTextarea[tabname] = textarea;
-    textarea.addEventListener('focus', () => {
-      activePromptTextarea[tabname] = textarea;
     });
   }
-
-  registerPrompt('txt2img', 'txt2img_prompt');
-  registerPrompt('txt2img', 'txt2img_neg_prompt');
-  registerPrompt('img2img', 'img2img_prompt');
-  registerPrompt('img2img', 'img2img_neg_prompt');
+  const t1 = performance.now();
+  if (found > 0) log(`filterExtraNetworks: text=${searchTerm} items=${items} match=${found} time=${Math.round(1000 * (t1 - t0)) / 1000000}`);
+  else log(`filterExtraNetworks: text=all items=${items} time=${Math.round(1000 * (t1 - t0)) / 1000000}`);
 }
 
-onUiLoaded(setupExtraNetworks);
-const re_extranet = /<([^:]+:[^:]+):[\d\.]+>/;
-const re_extranet_g = /\s+<([^:]+:[^:]+):[\d\.]+>/g;
-
 function tryToRemoveExtraNetworkFromPrompt(textarea, text) {
+  const re_extranet = /<([^:]+:[^:]+):[\d\.]+>/;
+  const re_extranet_g = /\s+<([^:]+:[^:]+):[\d\.]+>/g;
   let m = text.match(re_extranet);
   let replaced = false;
   let newTextareaText;
@@ -142,117 +153,240 @@ function tryToRemoveExtraNetworkFromPrompt(textarea, text) {
   return false;
 }
 
-function refreshExtraNetworks(tabname) {
+function sortExtraNetworks() {
+  const sortDesc = ['Name [A-Z]', 'Name [Z-A]', 'Date [Newest]', 'Date [Oldest]', 'Size [Largest]', 'Size [Smallest]'];
+  const pagename = getENActivePage();
+  if (!pagename) return 'sort error: unknown page';
+  const allPages = Array.from(gradioApp().querySelectorAll('.extra-network-cards'));
+  const pages = allPages.filter((el) => el.id.includes(pagename.toLowerCase()));
+  let num = 0;
+  for (const pg of pages) {
+    const cards = Array.from(pg.querySelectorAll('.card') || []);
+    num = cards.length;
+    if (num === 0) return 'sort: no cards';
+    cards.sort((a, b) => { // eslint-disable-line no-loop-func
+      switch (sortVal) {
+        case 0: return a.dataset.search ? a.dataset.search.localeCompare(b.dataset.search) : 0;
+        case 1: return b.dataset.search ? b.dataset.search.localeCompare(a.dataset.search) : 0;
+        case 2: return a.dataset.mtime && !isNaN(a.dataset.mtime) ? parseFloat(b.dataset.mtime) - parseFloat(a.dataset.mtime) : 0;
+        case 3: return b.dataset.mtime && !isNaN(b.dataset.mtime) ? parseFloat(a.dataset.mtime) - parseFloat(b.dataset.mtime) : 0;
+        case 4: return a.dataset.size && !isNaN(a.dataset.size) ? parseFloat(b.dataset.size) - parseFloat(a.dataset.size) : 0;
+        case 5: return b.dataset.size && !isNaN(b.dataset.size) ? parseFloat(a.dataset.size) - parseFloat(b.dataset.size) : 0;
+      }
+      return 0;
+    });
+    for (const card of cards) pg.appendChild(card);
+  }
+  const desc = sortDesc[sortVal];
+  sortVal = (sortVal + 1) % sortDesc.length;
+  log('sortExtraNetworks', pagename, num, desc);
+  return `sort page ${pagename} cards ${num} by ${desc}`;
+}
+
+function refreshENInput(tabname) {
+  log('refreshExtraNetworks', tabname, gradioApp().querySelector(`#${tabname}_extra_networks textarea`)?.value);
   gradioApp().querySelector(`#${tabname}_extra_networks textarea`)?.dispatchEvent(new Event('input'));
 }
 
 function cardClicked(textToAdd, allowNegativePrompt) {
   const tabname = getENActiveTab();
   const textarea = allowNegativePrompt ? activePromptTextarea[tabname] : gradioApp().querySelector(`#${tabname}_prompt > label > textarea`);
-  if (!tryToRemoveExtraNetworkFromPrompt(textarea, textToAdd)) textarea.value = textarea.value + opts.extra_networks_add_text_separator + textToAdd;
+  if (textarea.value.indexOf(textToAdd) !== -1) textarea.value = textarea.value.replace(textToAdd, '');
+  else textarea.value += textToAdd;
   updateInput(textarea);
-}
-
-function saveCardPreview(event, filename) {
-  const tabname = getENActiveTab();
-  const textarea = gradioApp().querySelector(`#${tabname}_preview_filename  > label > textarea`);
-  const button = gradioApp().getElementById(`${tabname}_save_preview`);
-  textarea.value = filename;
-  updateInput(textarea);
-  button.click();
-  event.stopPropagation();
-  event.preventDefault();
-}
-
-function saveCardDescription(event, filename, descript) {
-  const tabname = getENActiveTab();
-  const textarea = gradioApp().querySelector(`#${tabname}_description_filename  > label > textarea`);
-  const button = gradioApp().getElementById(`${tabname}_save_description`);
-  const description = gradioApp().getElementById(`${tabname}_description`);
-  textarea.value = filename;
-  description.value = descript;
-  updateInput(textarea);
-  button.click();
-  event.stopPropagation();
-  event.preventDefault();
-}
-
-function readCardDescription(event, filename, descript, extraPage, cardName) {
-  const tabname = getENActiveTab();
-  const textarea = gradioApp().querySelector(`#${tabname}_description_filename  > label > textarea`);
-  const description = gradioApp().querySelector(`#${tabname}_description > label > textarea`);
-  const button = gradioApp().getElementById(`${tabname}_read_description`);
-  textarea.value = filename;
-  description.value = descript?.trim() || '';
-  updateInput(textarea);
-  updateInput(description);
-  button.click();
-  event.stopPropagation();
-  event.preventDefault();
 }
 
 function extraNetworksSearchButton(event) {
   const tabname = getENActiveTab();
-  const searchTextarea = gradioApp().querySelector(`#${tabname}_extra_tabs > div > div > textarea`);
+  const searchTextarea = gradioApp().querySelector(`#${tabname}_extra_search textarea`);
   const button = event.target;
-  const text = button.classList.contains('search-all') ? '' : `/${button.textContent.trim()}/`;
+  const text = button.classList.contains('search-all') ? '' : `${button.textContent.trim()}/`;
   searchTextarea.value = text;
   updateInput(searchTextarea);
 }
 
-function popup(contents) {
-  if (!globalPopup) {
-    globalPopup = document.createElement('div');
-    globalPopup.onclick = () => { globalPopup.style.display = 'none'; };
-    globalPopup.classList.add('global-popup');
-    const close = document.createElement('div');
-    close.classList.add('global-popup-close');
-    close.onclick = () => { globalPopup.style.display = 'none'; };
-    close.title = 'Close';
-    globalPopup.appendChild(close);
-    globalPopupInner = document.createElement('div');
-    globalPopupInner.onclick = (event) => { event.stopPropagation(); return false; };
-    globalPopupInner.classList.add('global-popup-inner');
-    globalPopup.appendChild(globalPopupInner);
-    gradioApp().appendChild(globalPopup);
+let desiredStyle = '';
+function selectStyle(name) {
+  desiredStyle = name;
+  const tabname = getENActiveTab();
+  const button = gradioApp().querySelector(`#${tabname}_styles_select`);
+  button.click();
+}
+
+function applyStyles(styles) {
+  let newStyles = [];
+  if (styles) newStyles = Array.isArray(styles) ? styles : [styles];
+  const index = newStyles.indexOf(desiredStyle);
+  if (index > -1) newStyles.splice(index, 1);
+  else newStyles.push(desiredStyle);
+  return newStyles.join('|');
+}
+
+function quickApplyStyle() {
+  const tabname = getENActiveTab();
+  const btnApply = gradioApp().getElementById(`${tabname}_extra_apply`);
+  if (btnApply) btnApply.click();
+}
+
+function quickSaveStyle() {
+  const tabname = getENActiveTab();
+  const btnSave = gradioApp().getElementById(`${tabname}_extra_quicksave`);
+  if (btnSave) btnSave.click();
+}
+
+let enDirty = false;
+function closeDetailsEN(args) {
+  // log('closeDetailsEN');
+  enDirty = true;
+  const tabname = getENActiveTab();
+  const btnClose = gradioApp().getElementById(`${tabname}_extra_details_close`);
+  if (btnClose) setTimeout(() => btnClose.click(), 100);
+  const btnRefresh = gradioApp().getElementById(`${tabname}_extra_refresh`);
+  if (btnRefresh && enDirty) setTimeout(() => btnRefresh.click(), 100);
+  return args;
+}
+
+function refeshDetailsEN(args) {
+  log(`refeshDetailsEN: ${enDirty}`);
+  const tabname = getENActiveTab();
+  const btnRefresh = gradioApp().getElementById(`${tabname}_extra_refresh`);
+  if (btnRefresh && enDirty) setTimeout(() => btnRefresh.click(), 100);
+  enDirty = false;
+  return args;
+}
+
+// init
+
+function setupExtraNetworksForTab(tabname) {
+  gradioApp().querySelector(`#${tabname}_extra_tabs`).classList.add('extra-networks');
+  const en = gradioApp().getElementById(`${tabname}_extra_networks`);
+  const tabs = gradioApp().querySelector(`#${tabname}_extra_tabs > div`);
+
+  // buttons
+  const btnRefresh = gradioApp().getElementById(`${tabname}_extra_refresh`);
+  const btnScan = gradioApp().getElementById(`${tabname}_extra_scan`);
+  const btnSave = gradioApp().getElementById(`${tabname}_extra_save`);
+  const btnClose = gradioApp().getElementById(`${tabname}_extra_close`);
+  const btnSort = gradioApp().getElementById(`${tabname}_extra_sort`);
+  const btnView = gradioApp().getElementById(`${tabname}_extra_view`);
+  const btnModel = gradioApp().getElementById(`${tabname}_extra_model`);
+  const btnApply = gradioApp().getElementById(`${tabname}_extra_apply`);
+  const buttons = document.createElement('span');
+  buttons.classList.add('buttons');
+  if (btnRefresh) buttons.appendChild(btnRefresh);
+  if (btnModel) buttons.appendChild(btnModel);
+  if (btnApply) buttons.appendChild(btnApply);
+  if (btnScan) buttons.appendChild(btnScan);
+  if (btnSave) buttons.appendChild(btnSave);
+  if (btnSort) buttons.appendChild(btnSort);
+  if (btnView) buttons.appendChild(btnView);
+  if (btnClose) buttons.appendChild(btnClose);
+  btnModel.onclick = () => btnModel.classList.toggle('toolbutton-selected');
+  tabs.appendChild(buttons);
+
+  // details
+  const detailsImg = gradioApp().getElementById(`${tabname}_extra_details_img`);
+  const detailsClose = gradioApp().getElementById(`${tabname}_extra_details_close`);
+  if (detailsImg && detailsClose) {
+    detailsImg.title = 'Close details';
+    detailsImg.onclick = () => detailsClose.click();
   }
-  globalPopupInner.innerHTML = '';
-  globalPopupInner.appendChild(contents);
-  globalPopup.style.display = 'flex';
-}
 
-function readCardMetadata(event, extraPage, cardName) {
-  requestGet('./sd_extra_networks/metadata', { page: extraPage, item: cardName }, (data) => {
-    if (data?.metadata && (typeof (data?.metadata) === 'string')) {
-      const elem = document.createElement('pre');
-      elem.classList.add('popup-metadata');
-      elem.textContent = data.metadata;
-      popup(elem);
+  // search and description
+  const div = document.createElement('div');
+  div.classList.add('second-line');
+  tabs.appendChild(div);
+  const txtSearch = gradioApp().querySelector(`#${tabname}_extra_search`);
+  const txtSearchValue = gradioApp().querySelector(`#${tabname}_extra_search textarea`);
+  const txtDescription = gradioApp().getElementById(`${tabname}_description`);
+  txtSearch.classList.add('search');
+  txtDescription.classList.add('description');
+  div.appendChild(txtSearch);
+  div.appendChild(txtDescription);
+  let searchTimer = null;
+  txtSearchValue.addEventListener('input', (evt) => {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      filterExtraNetworksForTab(tabname, txtSearchValue.value.toLowerCase());
+      searchTimer = null;
+    }, 150);
+  });
+
+  // card hover
+  let hoverTimer = null;
+  let previousCard = null;
+  gradioApp().getElementById(`${tabname}_extra_tabs`).onmouseover = (e) => {
+    const el = e.target.closest('.card'); // bubble-up to card
+    if (!el || (el.title === previousCard)) return;
+    if (!hoverTimer) {
+      hoverTimer = setTimeout(() => {
+        readCardDescription(el.dataset.page, el.dataset.name);
+        readCardTags(el, el.dataset.tags);
+        previousCard = el.title;
+      }, 300);
     }
-  }, () => {});
-  event.stopPropagation();
-  event.preventDefault();
-}
+    el.onmouseout = () => {
+      clearTimeout(hoverTimer);
+      hoverTimer = null;
+    };
+  };
 
-function readCardTags(event, extraPage, cardTags) {
-  if ((cardTags || []).length === 0) return;
-  const textarea = activePromptTextarea[getENActiveTab()];
-  const textToAdd = cardTags.join(' ');
-  if (!tryToRemoveExtraNetworkFromPrompt(textarea, textToAdd)) textarea.value = textarea.value + opts.extra_networks_add_text_separator + textToAdd;
-  updateInput(textarea);
-  event.stopPropagation();
-  event.preventDefault();
-}
-
-function readCardInformation(event, extraPage, cardName) {
-  requestGet('./sd_extra_networks/info', { page: extraPage, item: cardName }, (data) => {
-    if (data?.info && (typeof (data?.info) === 'string')) {
-      const elem = document.createElement('pre');
-      elem.classList.add('popup-metadata');
-      elem.textContent = data.info;
-      popup(elem);
+  // en style
+  const intersectionObserver = new IntersectionObserver((entries) => {
+    if (!en) return;
+    for (const el of Array.from(gradioApp().querySelectorAll('.extra-networks-page'))) {
+      el.style.height = `${window.opts.extra_networks_height}vh`;
+      el.parentElement.style.width = '-webkit-fill-available';
     }
-  }, () => {});
-  event.stopPropagation();
-  event.preventDefault();
+    if (entries[0].intersectionRatio > 0) {
+      if (window.opts.extra_networks_card_cover === 'cover') {
+        en.style.transition = '';
+        en.style.zIndex = 100;
+        en.style.position = 'absolute';
+        en.style.right = 'unset';
+        en.style.width = 'unset';
+        en.style.height = 'unset';
+        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
+      } else if (window.opts.extra_networks_card_cover === 'sidebar') {
+        en.style.transition = 'width 0.2s ease';
+        en.style.zIndex = 100;
+        en.style.position = 'absolute';
+        en.style.right = '0';
+        en.style.width = `${window.opts.extra_networks_sidebar_width}vw`;
+        en.style.height = '-webkit-fill-available';
+        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = `${100 - 2 - window.opts.extra_networks_sidebar_width}vw`;
+      } else {
+        en.style.transition = '';
+        en.style.zIndex = 0;
+        en.style.position = 'relative';
+        en.style.right = 'unset';
+        en.style.width = 'unset';
+        en.style.height = 'unset';
+        gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
+      }
+    } else {
+      en.style.width = 0;
+      gradioApp().getElementById(`${tabname}_settings`).parentNode.style.width = 'unset';
+    }
+  });
+  intersectionObserver.observe(en); // monitor visibility of
 }
+
+function setupExtraNetworks() {
+  setupExtraNetworksForTab('txt2img');
+  setupExtraNetworksForTab('img2img');
+
+  function registerPrompt(tabname, id) {
+    const textarea = gradioApp().querySelector(`#${id} > label > textarea`);
+    if (!activePromptTextarea[tabname]) activePromptTextarea[tabname] = textarea;
+    textarea.addEventListener('focus', () => { activePromptTextarea[tabname] = textarea; });
+  }
+
+  registerPrompt('txt2img', 'txt2img_prompt');
+  registerPrompt('txt2img', 'txt2img_neg_prompt');
+  registerPrompt('img2img', 'img2img_prompt');
+  registerPrompt('img2img', 'img2img_neg_prompt');
+  log('initExtraNetworks');
+}
+
+onUiLoaded(setupExtraNetworks);

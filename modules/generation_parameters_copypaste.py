@@ -3,20 +3,20 @@ import io
 import os
 import re
 import json
-
 from PIL import Image
 import gradio as gr
 from modules.paths import data_path
 from modules import shared, ui_tempdir, script_callbacks, images
+
 
 re_param_code = r'\s*([\w ]+):\s*("(?:\\"[^,]|\\"|\\|[^\"])+"|[^,]*)(?:,|$)'
 re_param = re.compile(re_param_code)
 re_imagesize = re.compile(r"^(\d+)x(\d+)$")
 re_hypernet_hash = re.compile("\(([0-9a-f]+)\)$") # pylint: disable=anomalous-backslash-in-string
 type_of_gr_update = type(gr.update())
-
 paste_fields = {}
 registered_param_bindings = []
+debug = shared.log.info if os.environ.get('SD_PASTE_DEBUG', None) is not None else lambda *args, **kwargs: None
 
 
 class ParamBinding:
@@ -202,71 +202,25 @@ def find_hypernetwork_key(hypernet_name, hypernet_hash=None):
     return None
 
 
-def restore_old_hires_fix_params(res):
-    """for infotexts that specify old First pass size parameter, convert it into
-    width, height, and hr scale"""
-
-    firstpass_width = res.get('First pass size-1', None)
-    firstpass_height = res.get('First pass size-2', None)
-
-    if shared.opts.use_old_hires_fix_width_height:
-        hires_width = int(res.get("Hires resize-1", 0))
-        hires_height = int(res.get("Hires resize-2", 0))
-
-        if hires_width and hires_height:
-            res['Size-1'] = hires_width
-            res['Size-2'] = hires_height
-            return
-
-    if firstpass_width is None or firstpass_height is None:
-        return
-
-    firstpass_width, firstpass_height = int(firstpass_width), int(firstpass_height)
-    width = int(res.get("Size-1", 512))
-    height = int(res.get("Size-2", 512))
-
-    if firstpass_width == 0 or firstpass_height == 0:
-        from modules import processing
-        firstpass_width, firstpass_height = processing.old_hires_fix_first_pass_dimensions(width, height)
-
-    res['Size-1'] = firstpass_width
-    res['Size-2'] = firstpass_height
-    res['Hires resize-1'] = width
-    res['Hires resize-2'] = height
-
-
 def parse_generation_parameters(x: str):
-    """parses generation parameters string, the one you see in text field under the picture in UI:
-```
-girl with an artist's beret, determined, blue eyes, desert scene, computer monitors, heavy makeup, by Alphonse Mucha and Charlie Bowater, ((eyeshadow)), (coquettish), detailed, intricate
-Negative prompt: ugly, fat, obese, chubby, (((deformed))), [blurry], bad anatomy, disfigured, poorly drawn face, mutation, mutated, (extra_limb), (ugly), (poorly drawn hands), messy drawing
-Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 965400086, Size: 512x512, Model hash: 45dee52b
-```
-
-    returns a dict with field values
-    """
-    if x is None:
-        return {}
     res = {}
-    prompt = ""
-    negative_prompt = ""
-    done_with_prompt = False
-    *lines, lastline = x.strip().split("\n")
-    if len(re_param.findall(lastline)) < 3:
-        lines.append(lastline)
-        lastline = ''
-    for line in lines:
-        line = line.strip()
-        if line.startswith("Negative prompt:"):
-            done_with_prompt = True
-            line = line[16:].strip()
-        if done_with_prompt:
-            negative_prompt += ("" if negative_prompt == "" else "\n") + line
-        else:
-            prompt += ("" if prompt == "" else "\n") + line
-    res["Prompt"] = prompt
-    res["Negative prompt"] = negative_prompt
-    for k, v in re_param.findall(lastline):
+    if x is None:
+        return res
+    remaining = x.replace('\n', ' ').strip()
+    if len(remaining) == 0:
+        return res
+    remaining = x[7:] if x.startswith('Prompt: ') else x
+    remaining = x[11:] if x.startswith('parameters: ') else x
+    if 'Steps: ' in remaining and 'Negative prompt: ' not in remaining:
+        remaining = remaining.replace('Steps: ', 'Negative prompt: Steps: ')
+    prompt, remaining = remaining.strip().split('Negative prompt: ', maxsplit=1) if 'Negative prompt: ' in remaining else (remaining, '')
+    res["Prompt"] = prompt.strip()
+    negative, remaining = remaining.strip().split('Steps: ', maxsplit=1) if 'Steps: ' in remaining else (remaining, None)
+    res["Negative prompt"] = negative.strip()
+    if remaining is None:
+        return res
+    remaining = f'Steps: {remaining}'
+    for k, v in re_param.findall(remaining.strip()):
         try:
             if v[0] == '"' and v[-1] == '"':
                 v = unquote(v)
@@ -278,17 +232,8 @@ Steps: 20, Sampler: Euler a, CFG scale: 7, Seed: 965400086, Size: 512x512, Model
                 res[k] = v
         except Exception:
             pass
-
-    # Missing CLIP skip means it was set to 1 (the default)
-    if "Clip skip" not in res:
-        res["Clip skip"] = "1"
-    hypernet = res.get("Hypernet", None)
-    if hypernet is not None:
-        res["Prompt"] += f"""<hypernet:{hypernet}:{res.get("Hypernet strength", "1.0")}>"""
-    if "Hires resize-1" not in res:
-        res["Hires resize-1"] = 0
-        res["Hires resize-2"] = 0
-    restore_old_hires_fix_params(res)
+    res["Full quality"] = res.get('VAE', None) != 'TAESD'
+    debug(f"Parse prompt: {res}")
     return res
 
 
@@ -296,35 +241,48 @@ settings_map = {}
 
 
 infotext_to_setting_name_mapping = [
-    ('VAE', 'sd_vae'),
-    ('Conditional mask weight', 'inpainting_mask_weight'),
+    ('Backend', 'sd_backend'),
     ('Model hash', 'sd_model_checkpoint'),
-    ('Backed', 'sd_backend'),
     ('Refiner', 'sd_model_refiner'),
+    ('VAE', 'sd_vae'),
     ('Parser', 'prompt_attention'),
-    ('ENSD', 'eta_noise_seed_delta'),
-    ('Noise multiplier', 'initial_noise_multiplier'),
-    ('Eta', 'eta_ancestral'),
-    ('Eta DDIM', 'eta_ddim'),
-    ('Lora method', 'diffusers_lora_loader'),
-    ('Discard penultimate sigma', 'always_discard_next_to_last_sigma'),
-    ('UniPC variant', 'uni_pc_variant'),
+    ('Color correction', 'img2img_color_correction'),
+    # Samplers
+    ('Sampler Eta', 'scheduler_eta'),
+    ('Sampler ENSD', 'eta_noise_seed_delta'),
+    ('Sampler order', 'schedulers_solver_order'),
+    # Samplers diffusers
+    ('Sampler beta schedule', 'schedulers_beta_schedule'),
+    ('Sampler beta start', 'schedulers_beta_start'),
+    ('Sampler beta end', 'schedulers_beta_end'),
+    ('Sampler DPM solver', 'schedulers_dpm_solver'),
+    # Samplers original
+    ('Sampler brownian', 'schedulers_brownian_noise'),
+    ('Sampler discard', 'schedulers_discard_penultimate'),
+    ('Sampler dyn threshold', 'schedulers_use_thresholding'),
+    ('Sampler karras', 'schedulers_use_karras'),
+    ('Sampler low order', 'schedulers_use_loworder'),
+    ('Sampler quantization', 'enable_quantization'),
+    ('Sampler sigma', 'schedulers_sigma'),
+    ('Sampler sigma min', 's_min'),
+    ('Sampler sigma max', 's_max'),
+    ('Sampler sigma churn', 's_churn'),
+    ('Sampler sigma uncond', 's_min_uncond'),
+    ('Sampler sigma noise', 's_noise'),
+    ('Sampler sigma tmin', 's_tmin'),
+    ('Sampler ENSM', 'initial_noise_multiplier'), # img2img only
     ('UniPC skip type', 'uni_pc_skip_type'),
-    ('UniPC order', 'schedulers_solver_order'),
-    ('UniPC lower order final', 'schedulers_use_loworder'),
+    ('UniPC variant', 'uni_pc_variant'),
+    # Token Merging
+    ('Mask weight', 'inpainting_mask_weight'),
     ('Token merging ratio', 'token_merging_ratio'),
-    ('Token merging ratio hr', 'token_merging_ratio_hr'),
+    ('ToMe', 'token_merging_ratio'),
+    ('ToMe hires', 'token_merging_ratio_hr'),
+    ('ToMe img2img', 'token_merging_ratio_img2img'),
 ]
 
 
 def create_override_settings_dict(text_pairs):
-    """creates processing's override_settings parameters from gradio's multiselect
-    Example input:
-        ['Clip skip: 2', 'Model hash: e6e99610c4', 'ENSD: 31337']
-
-    Example output:
-        {'CLIP_stop_at_last_layers': 2, 'sd_model_checkpoint': 'e6e99610c4', 'eta_noise_seed_delta': 31337}
-    """
     res = {}
     params = {}
     for pair in text_pairs:
@@ -341,19 +299,20 @@ def create_override_settings_dict(text_pairs):
 def connect_paste(button, local_paste_fields, input_comp, override_settings_component, tabname):
 
     def paste_func(prompt):
-        if prompt is not None and 'Negative prompt' not in prompt and 'Steps' not in prompt:
-            prompt = None
-        if not prompt and not shared.cmd_opts.hide_ui_dir_config:
+        if prompt is None or len(prompt.strip()) == 0 and not shared.cmd_opts.hide_ui_dir_config:
             filename = os.path.join(data_path, "params.txt")
             if os.path.exists(filename):
                 with open(filename, "r", encoding="utf8") as file:
                     prompt = file.read()
+                shared.log.debug(f'Paste prompt: type="params" prompt="{prompt}"')
             else:
                 prompt = ''
-        shared.log.debug(f'Paste prompt: {prompt}')
+        else:
+            shared.log.debug(f'Paste prompt: type="current" prompt="{prompt}"')
         params = parse_generation_parameters(prompt)
         script_callbacks.infotext_pasted_callback(prompt, params)
         res = []
+        applied = {}
         for output, key in local_paste_fields:
             if callable(key):
                 v = key(params)
@@ -363,6 +322,7 @@ def connect_paste(button, local_paste_fields, input_comp, override_settings_comp
                 res.append(gr.update())
             elif isinstance(v, type_of_gr_update):
                 res.append(v)
+                applied[key] = v
             else:
                 try:
                     valtype = type(output.value)
@@ -371,8 +331,10 @@ def connect_paste(button, local_paste_fields, input_comp, override_settings_comp
                     else:
                         val = valtype(v)
                     res.append(gr.update(value=val))
+                    applied[key] = val
                 except Exception:
                     res.append(gr.update())
+        debug(f"Parse apply: {applied}")
         return res
 
     if override_settings_component is not None:
@@ -383,14 +345,17 @@ def connect_paste(button, local_paste_fields, input_comp, override_settings_comp
                 if v is None:
                     continue
                 if shared.opts.disable_weights_auto_swap:
-                    if setting_name == "sd_model_checkpoint" or setting_name == 'sd_model_refiner' or setting_name == 'sd_backend':
+                    if setting_name == "sd_model_checkpoint" or setting_name == 'sd_model_refiner' or setting_name == 'sd_backend' or setting_name == 'sd_vae':
                         continue
                 v = shared.opts.cast_value(setting_name, v)
                 current_value = getattr(shared.opts, setting_name, None)
                 if v == current_value:
                     continue
+                if type(current_value) == str and v == os.path.splitext(current_value)[0]:
+                    continue
                 vals[param_name] = v
             vals_pairs = [f"{k}: {v}" for k, v in vals.items()]
+            shared.log.debug(f'Settings overrides: {vals_pairs}')
             return gr.Dropdown.update(value=vals_pairs, choices=vals_pairs, visible=len(vals_pairs) > 0)
         local_paste_fields = local_paste_fields + [(override_settings_component, paste_settings)]
 

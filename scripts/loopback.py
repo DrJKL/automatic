@@ -90,7 +90,7 @@ class Script(scripts.Script):
                     elif append_interrogation == "DeepBooru":
                         p.prompt += deepbooru.model.tag(p.init_images[0])
 
-                state.job = f"Iteration {i + 1}/{loops}, batch {n + 1}/{batch_count}"
+                state.job = f"loopback iteration {i+1}/{loops} batch {n+1}/{batch_count}"
 
                 processed = processing.process_images(p)
 
@@ -128,7 +128,7 @@ class Script(scripts.Script):
         if len(history) > 1:
             grid = images.image_grid(history, rows=1)
             if opts.grid_save:
-                images.save_image(grid, p.outpath_grids, "grid", initial_seed, p.prompt, opts.grid_format, info=info, short_filename=not opts.grid_extended_filename, grid=True, p=p)
+                images.save_image(grid, p.outpath_grids, "grid", initial_seed, p.prompt, opts.grid_format, info=info, grid=True, p=p)
 
             if opts.return_grid:
                 grids.append(grid)

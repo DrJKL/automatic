@@ -1,6 +1,5 @@
 import ssl
 import time
-import datetime
 import logging
 from asyncio.exceptions import CancelledError
 import anyio
@@ -14,6 +13,7 @@ from fastapi.encoders import jsonable_encoder
 from installer import log
 import modules.errors as errors
 
+
 errors.install()
 
 
@@ -26,7 +26,7 @@ def setup_middleware(app: FastAPI, cmd_opts):
     from fastapi.middleware.gzip import GZipMiddleware
     app.user_middleware = [x for x in app.user_middleware if x.cls.__name__ != 'CORSMiddleware']
     app.middleware_stack = None # reset current middleware to allow modifying user provided list
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(GZipMiddleware, minimum_size=2048)
     if cmd_opts.cors_origins and cmd_opts.cors_regex:
         app.add_middleware(CORSMiddleware, allow_origins=cmd_opts.cors_origins.split(','), allow_origin_regex=cmd_opts.cors_regex, allow_methods=['*'], allow_credentials=True, allow_headers=['*'])
     elif cmd_opts.cors_origins:
@@ -42,9 +42,12 @@ def setup_middleware(app: FastAPI, cmd_opts):
             duration = str(round(time.time() - ts, 4))
             res.headers["X-Process-Time"] = duration
             endpoint = req.scope.get('path', 'err')
+            token = req.cookies.get("access-token") or req.cookies.get("access-token-unsecure")
             if (cmd_opts.api_log or cmd_opts.api_only) and endpoint.startswith('/sdapi'):
-                log.info('API {t} {code} {prot}/{ver} {method} {endpoint} {cli} {duration}'.format( # pylint: disable=consider-using-f-string, logging-format-interpolation
-                    t = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
+                if '/sdapi/v1/log' in endpoint:
+                    return res
+                log.info('API {user} {code} {prot}/{ver} {method} {endpoint} {cli} {duration}'.format( # pylint: disable=consider-using-f-string, logging-format-interpolation
+                    user = app.tokens.get(token),
                     code = res.status_code,
                     ver = req.scope.get('http_version', '0.0'),
                     cli = req.scope.get('client', ('0:0.0.0', 0))[0],

@@ -43,6 +43,7 @@ class ProgressRequest(BaseModel):
 
 
 class InternalProgressResponse(BaseModel):
+    job: str = Field(default=None, title="Job name", description="Internal job name")
     active: bool = Field(title="Whether the task is being worked on right now")
     queued: bool = Field(title="Whether the task is in queue")
     paused: bool = Field(title="Whether the task is paused")
@@ -54,28 +55,27 @@ class InternalProgressResponse(BaseModel):
     textinfo: str = Field(default=None, title="Info text", description="Info text used by WebUI.")
 
 
-def setup_progress_api(app):
-    return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=InternalProgressResponse)
-
-
 def progressapi(req: ProgressRequest):
     active = req.id_task == current_task
     queued = req.id_task in pending_tasks
     completed = req.id_task in finished_tasks
     paused = shared.state.paused
     if not active:
-        return InternalProgressResponse(active=active, queued=queued, paused=paused, completed=completed, id_live_preview=-1, textinfo="Queued..." if queued else "Waiting...")
-    progress = 0
-    job_count, job_no = shared.state.job_count, shared.state.job_no
-    sampling_steps, sampling_step = shared.state.sampling_steps, shared.state.sampling_step
-    if job_count > 0:
-        progress += job_no / job_count
-    if sampling_steps > 0 and job_count > 0:
-        progress += 1 / job_count * sampling_step / sampling_steps
-    progress = min(progress, 1)
-    elapsed_since_start = time.time() - shared.state.time_start
-    predicted_duration = elapsed_since_start / progress if progress > 0 else None
-    eta = predicted_duration - elapsed_since_start if predicted_duration is not None else None
+        return InternalProgressResponse(job=shared.state.job, active=active, queued=queued, paused=paused, completed=completed, id_live_preview=-1, textinfo="Queued..." if queued else "Waiting...")
+    if shared.state.job_no > shared.state.job_count:
+        shared.state.job_count = shared.state.job_no
+    batch_x = max(shared.state.job_no, 0)
+    batch_y = max(shared.state.job_count, 1)
+    step_x = max(shared.state.sampling_step, 0)
+    step_y = max(shared.state.sampling_steps, 1)
+    current = step_y * batch_x + step_x
+    total = step_y * batch_y
+    progress = min(1, abs(current / total) if total > 0 else 0)
+    elapsed = time.time() - shared.state.time_start
+    predicted = elapsed / progress if progress > 0 else None
+    eta = predicted - elapsed if predicted is not None else None
+    # shared.log.debug(f'Progress: step={step_x}:{step_y} batch={batch_x}:{batch_y} current={current} total={total} progress={progress} elapsed={elapsed} eta={eta}')
+
     id_live_preview = req.id_live_preview
     live_preview = None
     shared.state.set_current_image()
@@ -84,4 +84,10 @@ def progressapi(req: ProgressRequest):
         shared.state.current_image.save(buffered, format='jpeg')
         live_preview = f'data:image/jpeg;base64,{base64.b64encode(buffered.getvalue()).decode("ascii")}'
         id_live_preview = shared.state.id_live_preview
-    return InternalProgressResponse(active=active, queued=queued, paused=paused, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
+
+    res = InternalProgressResponse(job=shared.state.job, active=active, queued=queued, paused=paused, completed=completed, progress=progress, eta=eta, live_preview=live_preview, id_live_preview=id_live_preview, textinfo=shared.state.textinfo)
+    return res
+
+
+def setup_progress_api(app):
+    return app.add_api_route("/internal/progress", progressapi, methods=["POST"], response_model=InternalProgressResponse)

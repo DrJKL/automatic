@@ -14,7 +14,7 @@ from typing import List
 import lark
 import torch
 from compel import Compel
-from modules.shared import opts, log
+from modules.shared import opts, log, backend, Backend
 
 # a prompt like this: "fantasy landscape with a [mountain:lake:0.25] and [an oak:a christmas tree:0.75][ in foreground::0.6][ in background:0.25] [shoddy:masterful:0.5]"
 # will be represented with prompt_schedule like this (assuming steps=100):
@@ -122,7 +122,7 @@ def get_learned_conditioning_prompt_schedules(prompts, steps):
                 before, after, _, when = args
                 yield before or () if step <= when else after
             def alternate(self, args):
-                yield next(args[(step - 1)%len(args)])
+                yield next(args[(step - 1)%len(args)]) # pylint: disable=stop-iteration-return
             def start(self, args):
                 def flatten(x):
                     if type(x) == str:
@@ -304,7 +304,7 @@ def parse_prompt_attention(text):
     square_brackets = []
     if opts.prompt_attention == 'Fixed attention':
         res = [[text, 1.0]]
-        debug(f'Prompt parse-attention: {opts.prompt_attention} {res}')
+        debug(f'Prompt: parser={opts.prompt_attention} {res}')
         return res
     elif opts.prompt_attention == 'Compel parser':
         conjunction = Compel.parse_prompt_string(text)
@@ -313,47 +313,55 @@ def parse_prompt_attention(text):
         res = []
         for frag in conjunction.prompts[0].children:
             res.append([frag.text, frag.weight])
-        debug(f'Prompt parse-attention: {opts.prompt_attention} {res}')
+        debug(f'Prompt: parser={opts.prompt_attention} {res}')
         return res
     elif opts.prompt_attention == 'A1111 parser':
         re_attention = re_attention_v1
         whitespace = ''
     else:
         re_attention = re_attention_v1
-        text = text.replace('\\n', ' ')
+        if backend == Backend.DIFFUSERS:
+            text = text.replace('\n', ' BREAK ')
+        else:
+            text = text.replace('\n', ' ')
         whitespace = ' '
 
     def multiply_range(start_position, multiplier):
-        for p in range(start_position, len(res)):
-            res[p][1] *= multiplier
+        try:
+            for p in range(start_position, len(res)):
+                res[p][1] *= multiplier
+        except Exception as e:
+            log(f'Prompt parser: {e}')
 
     for m in re_attention.finditer(text):
-        text = m.group(0)
-        weight = m.group(1)
-
-        if text.startswith('\\'):
-            res.append([text[1:], 1.0])
-        elif text == '(':
-            round_brackets.append(len(res))
-        elif text == '[':
-            square_brackets.append(len(res))
-        elif weight is not None and len(round_brackets) > 0:
-            multiply_range(round_brackets.pop(), float(weight))
-        elif text == ')' and len(round_brackets) > 0:
-            multiply_range(round_brackets.pop(), round_bracket_multiplier)
-        elif text == ']' and len(square_brackets) > 0:
-            multiply_range(square_brackets.pop(), square_bracket_multiplier)
-        else:
-            parts = re.split(re_break, text)
-            for i, part in enumerate(parts):
-                if i > 0:
-                    res.append(["BREAK", -1])
-                if opts.prompt_attention == 'Full parser':
-                    part = re_clean.sub("", part)
-                    part = re_whitespace.sub(" ", part).strip()
-                    if len(part) == 0:
-                        continue
-                res.append([part, 1.0])
+        try:
+            section = m.group(0)
+            weight = m.group(1)
+            if section.startswith('\\'):
+                res.append([section[1:], 1.0])
+            elif section == '(':
+                round_brackets.append(len(res))
+            elif section == '[':
+                square_brackets.append(len(res))
+            elif weight is not None and len(round_brackets) > 0:
+                multiply_range(round_brackets.pop(), float(weight))
+            elif section == ')' and len(round_brackets) > 0:
+                multiply_range(round_brackets.pop(), round_bracket_multiplier)
+            elif section == ']' and len(square_brackets) > 0:
+                multiply_range(square_brackets.pop(), square_bracket_multiplier)
+            else:
+                parts = re.split(re_break, section)
+                for i, part in enumerate(parts):
+                    if i > 0:
+                        res.append(["BREAK", -1])
+                    if opts.prompt_attention == 'Full parser':
+                        part = re_clean.sub("", part)
+                        part = re_whitespace.sub(" ", part).strip()
+                        if len(part) == 0:
+                            continue
+                    res.append([part, 1.0])
+        except Exception as e:
+            log.error(f'Prompt parser: section="{text[m.start():m.end()]}" position={m.start()}:{m.end()} text="{text}" error={e}')
     for pos in round_brackets:
         multiply_range(pos, round_bracket_multiplier)
     for pos in square_brackets:
@@ -368,7 +376,7 @@ def parse_prompt_attention(text):
             res.pop(i + 1)
         else:
             i += 1
-    debug(f'Prompt parse-attention: {opts.prompt_attention} {res}')
+    debug(f'Prompt: parser={opts.prompt_attention} {res}')
     return res
 
 if __name__ == "__main__":

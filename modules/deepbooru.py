@@ -16,9 +16,10 @@ class DeepDanbooru:
     def load(self):
         if self.model is not None:
             return
-
+        model_path = os.path.join(paths.models_path, "DeepDanbooru")
+        shared.log.debug(f'Loading interrogate model: type=DeepDanbooru folder={model_path}')
         files = modelloader.load_models(
-            model_path=os.path.join(paths.models_path, "torch_deepdanbooru"),
+            model_path=model_path,
             model_url='https://github.com/AUTOMATIC1111/TorchDeepDanbooru/releases/download/v1/model-resnet_custom_v3.pt',
             ext_filter=[".pt"],
             download_name='model-resnet_custom_v3.pt',
@@ -56,7 +57,7 @@ class DeepDanbooru:
         pic = images.resize_image(2, pil_image.convert("RGB"), 512, 512)
         a = np.expand_dims(np.array(pic, dtype=np.float32), 0) / 255
 
-        with torch.no_grad(), devices.autocast():
+        with devices.inference_context(), devices.autocast():
             x = torch.from_numpy(a).to(devices.device)
             y = self.model(x)[0].detach().cpu().numpy()
 

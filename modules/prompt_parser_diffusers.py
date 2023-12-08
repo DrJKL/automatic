@@ -1,29 +1,12 @@
 import os
 import typing
 import torch
-import diffusers
-from compel import Compel, ReturnedEmbeddingsType
-import modules.shared as shared
-import modules.prompt_parser as prompt_parser
-
-debug_output = os.environ.get('SD_PROMPT_DEBUG', None)
-debug = shared.log.info if debug_output is not None else lambda *args, **kwargs: None
+from compel import ReturnedEmbeddingsType
+from compel.embeddings_provider import BaseTextualInversionManager, EmbeddingsProvider
+from modules import shared, prompt_parser, devices
 
 
-def convert_to_compel(prompt: str):
-    if prompt is None:
-        return None
-    all_schedules = prompt_parser.get_learned_conditioning_prompt_schedules([prompt], 100)[0]
-    output_list = prompt_parser.parse_prompt_attention(all_schedules[0][1])
-    converted_prompt = []
-    for subprompt, weight in output_list:
-        if subprompt != " ":
-            if weight == 1:
-                converted_prompt.append(subprompt)
-            else:
-                converted_prompt.append(f"({subprompt}){weight}")
-    converted_prompt = " ".join(converted_prompt)
-    return converted_prompt
+debug = shared.log.info if os.environ.get('SD_PROMPT_DEBUG', None) is not None else lambda *args, **kwargs: None
 
 
 CLIP_SKIP_MAPPING = {
@@ -33,99 +16,182 @@ CLIP_SKIP_MAPPING = {
 }
 
 
-def compel_encode_prompts(
-    pipeline: diffusers.StableDiffusionXLPipeline | diffusers.StableDiffusionPipeline,
-    prompts: list,
-    negative_prompts: list,
-    prompts_2: typing.Optional[list] = None,
-    negative_prompts_2: typing.Optional[list] = None,
-    is_refiner: bool = None,
-    clip_skip: typing.Optional[int] = None,
-):
-    prompt_embeds = []
-    positive_pooleds = []
-    negative_embeds = []
-    negative_pooleds = []
-    for i in range(len(prompts)):
-        prompt_embed, positive_pooled, negative_embed, negative_pooled = compel_encode_prompt(pipeline,
-                                                                                              prompts[i],
-                                                                                              negative_prompts[i],
-                                                                                              prompts_2[i] if prompts_2 is not None else None,
-                                                                                              negative_prompts_2[i] if negative_prompts_2 is not None else None,
-                                                                                              is_refiner, clip_skip)
-        prompt_embeds.append(prompt_embed)
-        positive_pooleds.append(positive_pooled)
-        negative_embeds.append(negative_embed)
-        negative_pooleds.append(negative_pooled)
+# from https://github.com/damian0815/compel/blob/main/src/compel/diffusers_textual_inversion_manager.py
+class DiffusersTextualInversionManager(BaseTextualInversionManager):
+    def __init__(self, pipe, tokenizer):
+        self.pipe = pipe
+        self.tokenizer = tokenizer
+        if hasattr(self.pipe, 'embedding_db'):
+            self.pipe.embedding_db.embeddings_used.clear()
 
-    prompt_embeds = torch.cat(prompt_embeds, dim=0)
-    negative_embeds = torch.cat(negative_embeds, dim=0)
-    if shared.sd_model_type == "sdxl":
+    # from https://github.com/huggingface/diffusers/blob/705c592ea98ba4e288d837b9cba2767623c78603/src/diffusers/loaders.py#L599
+    def maybe_convert_prompt(self, prompt: typing.Union[str, typing.List[str]], tokenizer="PreTrainedTokenizer"):
+        prompts = [prompt] if not isinstance(prompt, typing.List) else prompt
+        prompts = [self._maybe_convert_prompt(p, tokenizer) for p in prompts]
+        if not isinstance(prompt, typing.List):
+            return prompts[0]
+        return prompts
+
+    def _maybe_convert_prompt(self, prompt: str, tokenizer="PreTrainedTokenizer"):
+        tokens = tokenizer.tokenize(prompt)
+        unique_tokens = set(tokens)
+        for token in unique_tokens:
+            if token in tokenizer.added_tokens_encoder:
+                if hasattr(self.pipe, 'embedding_db'):
+                    self.pipe.embedding_db.embeddings_used.append(token)
+                replacement = token
+                i = 1
+                while f"{token}_{i}" in tokenizer.added_tokens_encoder:
+                    replacement += f" {token}_{i}"
+                    i += 1
+                prompt = prompt.replace(token, replacement)
+        if hasattr(self.pipe, 'embedding_db'):
+            self.pipe.embedding_db.embeddings_used = list(set(self.pipe.embedding_db.embeddings_used))
+        debug(f'Prompt: convert={prompt}')
+        return prompt
+
+    def expand_textual_inversion_token_ids_if_necessary(self, token_ids: typing.List[int]) -> typing.List[int]:
+        if len(token_ids) == 0:
+            return token_ids
+        prompt = self.pipe.tokenizer.decode(token_ids)
+        prompt = self.maybe_convert_prompt(prompt, self.pipe.tokenizer)
+        debug(f'Prompt: expand={prompt}')
+        return self.pipe.tokenizer.encode(prompt, add_special_tokens=False)
+
+
+def encode_prompts(pipe, prompts: list, negative_prompts: list, clip_skip: typing.Optional[int] = None):
+    if 'StableDiffusion' not in pipe.__class__.__name__:
+        shared.log.warning(f"Prompt parser not supported: {pipe.__class__.__name__}")
+        return None, None, None, None
+    else:
+        prompt_embeds = []
+        positive_pooleds = []
+        negative_embeds = []
+        negative_pooleds = []
+        for i in range(len(prompts)):
+            prompt_embed, positive_pooled, negative_embed, negative_pooled = get_weighted_text_embeddings(pipe, prompts[i], negative_prompts[i], clip_skip)
+            prompt_embeds.append(prompt_embed)
+            positive_pooleds.append(positive_pooled)
+            negative_embeds.append(negative_embed)
+            negative_pooleds.append(negative_pooled)
+
+    if prompt_embeds is not None:
+        prompt_embeds = torch.cat(prompt_embeds, dim=0)
+    if negative_embeds is not None:
+        negative_embeds = torch.cat(negative_embeds, dim=0)
+    if positive_pooleds is not None and shared.sd_model_type == "sdxl":
         positive_pooleds = torch.cat(positive_pooleds, dim=0)
+    if negative_pooleds is not None and shared.sd_model_type == "sdxl":
         negative_pooleds = torch.cat(negative_pooleds, dim=0)
     return prompt_embeds, positive_pooleds, negative_embeds, negative_pooleds
 
 
-def compel_encode_prompt(
-    pipeline: diffusers.StableDiffusionXLPipeline | diffusers.StableDiffusionPipeline,
-    prompt: str,
-    negative_prompt: str,
-    prompt_2: typing.Optional[str] = None,
-    negative_prompt_2: typing.Optional[str] = None,
-    is_refiner: bool = None,
-    clip_skip: typing.Optional[int] = None,
-):
-    if shared.sd_model_type not in {"sd", "sdxl"}:
-        shared.log.warning(f"Prompt parser: Compel not supported: {type(pipeline).__name__}")
-        return (None, None, None, None)
+def get_prompts_with_weights(prompt: str):
+    manager = DiffusersTextualInversionManager(shared.sd_model, shared.sd_model.tokenizer or shared.sd_model.tokenizer_2)
+    prompt = manager.maybe_convert_prompt(prompt, shared.sd_model.tokenizer or shared.sd_model.tokenizer_2)
+    texts_and_weights = prompt_parser.parse_prompt_attention(prompt)
+    texts = [t for t, w in texts_and_weights]
+    text_weights = [w for t, w in texts_and_weights]
+    debug(f'Prompt: weights={texts_and_weights}')
+    return texts, text_weights
 
-    if shared.sd_model_type == "sdxl":
+
+def prepare_embedding_providers(pipe, clip_skip):
+    device = pipe.device if str(pipe.device) != 'meta' else devices.device
+    embeddings_providers = []
+    if 'XL' in pipe.__class__.__name__:
         embedding_type = ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NON_NORMALIZED
-        if clip_skip is not None and clip_skip > 1:
-            shared.log.warning(f"Prompt parser SDXL unsupported: clip_skip={clip_skip}")
     else:
-        embedding_type = CLIP_SKIP_MAPPING.get(clip_skip, ReturnedEmbeddingsType.PENULTIMATE_HIDDEN_STATES_NORMALIZED)
-        if clip_skip not in CLIP_SKIP_MAPPING:
-            shared.log.warning(f"Prompt parser unsupported: clip_skip={clip_skip} expected={set(CLIP_SKIP_MAPPING.keys())}")
+        if clip_skip > 2:
+            shared.log.warning(f"Prompt parser unsupported: clip_skip={clip_skip}")
+            clip_skip = 2
+        embedding_type = CLIP_SKIP_MAPPING[clip_skip]
+    if getattr(pipe, "tokenizer", None) is not None and getattr(pipe, "text_encoder", None) is not None:
+        embedding = EmbeddingsProvider(tokenizer=pipe.tokenizer, text_encoder=pipe.text_encoder, truncate=False, returned_embeddings_type=embedding_type, device=device)
+        embeddings_providers.append(embedding)
+    if getattr(pipe, "tokenizer_2", None) is not None and getattr(pipe, "text_encoder_2", None) is not None:
+        embedding = EmbeddingsProvider(tokenizer=pipe.tokenizer_2, text_encoder=pipe.text_encoder_2, truncate=False, returned_embeddings_type=embedding_type, device=device)
+        embeddings_providers.append(embedding)
+    return embeddings_providers
 
-    if shared.opts.prompt_attention != "Compel parser":
-        prompt = convert_to_compel(prompt)
-        negative_prompt = convert_to_compel(negative_prompt)
-        prompt_2 = convert_to_compel(prompt_2)
-        negative_prompt_2 = convert_to_compel(negative_prompt_2)
 
-    compel_te1 = Compel(
-        tokenizer=pipeline.tokenizer,
-        text_encoder=pipeline.text_encoder,
-        returned_embeddings_type=embedding_type,
-        requires_pooled=False,
-        # truncate_long_prompts=False,
-        device=shared.device
-    )
+def pad_to_same_length(pipe, embeds):
+    device = pipe.device if str(pipe.device) != 'meta' else devices.device
+    try: #SDXL
+        empty_embed = pipe.encode_prompt("")
+    except Exception: #SD1.5
+        empty_embed = pipe.encode_prompt("", device, 1, False)
+    empty_batched = torch.cat([empty_embed[0].to(embeds[0].device)] * embeds[0].shape[0])
+    max_token_count = max([embed.shape[1] for embed in embeds])
+    for i, embed in enumerate(embeds):
+        while embed.shape[1] < max_token_count:
+            embed = torch.cat([embed, empty_batched], dim=1)
+            embeds[i] = embed
+    return embeds
 
-    if shared.sd_model_type == "sdxl":
-        compel_te2 = Compel(
-            tokenizer=pipeline.tokenizer_2,
-            text_encoder=pipeline.text_encoder_2,
-            returned_embeddings_type=embedding_type,
-            requires_pooled=True,
-            device=shared.device
-        )
-        if not is_refiner:
-            positive_te1 = compel_te1(prompt)
-            positive_te2, positive_pooled = compel_te2(prompt_2)
-            positive = torch.cat((positive_te1, positive_te2), dim=-1)
-            negative_te1 = compel_te1(negative_prompt)
-            negative_te2, negative_pooled = compel_te2(negative_prompt_2)
-            negative = torch.cat((negative_te1, negative_te2), dim=-1)
+
+def get_weighted_text_embeddings(pipe, prompt: str = "", neg_prompt: str = "", clip_skip: int = None):
+    device = pipe.device if str(pipe.device) != 'meta' else devices.device
+    prompt_2 = prompt.split("TE2:")[-1]
+    neg_prompt_2 = neg_prompt.split("TE2:")[-1]
+    prompt = prompt.split("TE2:")[0]
+    neg_prompt = neg_prompt.split("TE2:")[0]
+
+    ps = [get_prompts_with_weights(p) for p in [prompt, prompt_2]]
+    positives = [t for t, w in ps]
+    positive_weights = [w for t, w in ps]
+    ns = [get_prompts_with_weights(p) for p in [neg_prompt, neg_prompt_2]]
+    negatives = [t for t, w in ns]
+    negative_weights = [w for t, w in ns]
+    if getattr(pipe, "tokenizer_2", None) is not None and getattr(pipe, "tokenizer", None) is None:
+        positives.pop(0)
+        positive_weights.pop(0)
+        negatives.pop(0)
+        negative_weights.pop(0)
+
+    embedding_providers = prepare_embedding_providers(pipe, clip_skip)
+    prompt_embeds = []
+    negative_prompt_embeds = []
+    pooled_prompt_embeds = None
+    negative_pooled_prompt_embeds =  None
+    for i in range(len(embedding_providers)):
+        # add BREAK keyword that splits the prompt into multiple fragments
+        text = positives[i]
+        weights = positive_weights[i]
+        text.append('BREAK')
+        weights.append(-1)
+        provider_embed = []
+        while 'BREAK' in text:
+            pos = text.index('BREAK')
+            embed, ptokens = embedding_providers[i].get_embeddings_for_weighted_prompt_fragments(text_batch=[text[:pos]], fragment_weights_batch=[weights[:pos]], device=device, should_return_tokens=True)
+            provider_embed.append(embed)
+            text = text[pos+1:]
+            weights = weights[pos+1:]
+        prompt_embeds.append(torch.cat(provider_embed, dim=1))
+        # negative prompt has no keywords
+        embed, ntokens = embedding_providers[i].get_embeddings_for_weighted_prompt_fragments(text_batch=[negatives[i]], fragment_weights_batch=[negative_weights[i]], device=device, should_return_tokens=True)
+        negative_prompt_embeds.append(embed)
+
+    if prompt_embeds[-1].shape[-1] > 768:
+        if shared.opts.diffusers_pooled == "weighted":
+            pooled_prompt_embeds = prompt_embeds[-1][
+                        torch.arange(prompt_embeds[-1].shape[0], device=device),
+                        (ptokens.to(dtype=torch.int, device=device) == 49407)
+                        .int()
+                        .argmax(dim=-1),
+                    ]
+            negative_pooled_prompt_embeds = negative_prompt_embeds[-1][
+                        torch.arange(negative_prompt_embeds[-1].shape[0], device=device),
+                        (ntokens.to(dtype=torch.int, device=device) == 49407)
+                        .int()
+                        .argmax(dim=-1),
+                    ]
         else:
-            positive, positive_pooled = compel_te2(prompt)
-            negative, negative_pooled = compel_te2(negative_prompt)
-        parsed = compel_te1.parse_prompt_string(prompt)
-        debug(f"Prompt parser Compel: {parsed}")
-        [prompt_embed, negative_embed] = compel_te2.pad_conditioning_tensors_to_same_length([positive, negative])
-        return prompt_embed, positive_pooled, negative_embed, negative_pooled
+            pooled_prompt_embeds = embedding_providers[-1].get_pooled_embeddings(texts=[prompt_2], device=device) if prompt_embeds[-1].shape[-1] > 768 else None
+            negative_pooled_prompt_embeds = embedding_providers[-1].get_pooled_embeddings(texts=[neg_prompt_2], device=device) if negative_prompt_embeds[-1].shape[-1] > 768 else None
 
-    positive, negative = compel_te1(prompt), compel_te1(negative_prompt)
-    [prompt_embed, negative_embed] = compel_te1.pad_conditioning_tensors_to_same_length([positive, negative])
-    return prompt_embed, None, negative_embed, None
+    prompt_embeds = torch.cat(prompt_embeds, dim=-1) if len(prompt_embeds) > 1 else prompt_embeds[0]
+    negative_prompt_embeds = torch.cat(negative_prompt_embeds, dim=-1) if len(negative_prompt_embeds) > 1 else negative_prompt_embeds[0]
+    if prompt_embeds.shape[1] != negative_prompt_embeds.shape[1]:
+        [prompt_embeds, negative_prompt_embeds] = pad_to_same_length(pipe, [prompt_embeds, negative_prompt_embeds])
+    return prompt_embeds, pooled_prompt_embeds, negative_prompt_embeds, negative_pooled_prompt_embeds

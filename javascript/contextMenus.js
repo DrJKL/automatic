@@ -9,13 +9,8 @@ const contextMenuInit = () => {
     const posy = event.clientY + document.body.scrollTop + document.documentElement.scrollTop;
     const oldMenu = gradioApp().querySelector('#context-menu');
     if (oldMenu) oldMenu.remove();
-    const tabButton = uiCurrentTab;
-    const baseStyle = window.getComputedStyle(tabButton);
     const contextMenu = document.createElement('nav');
     contextMenu.id = 'context-menu';
-    contextMenu.style.background = baseStyle.background;
-    contextMenu.style.color = baseStyle.color;
-    contextMenu.style.fontFamily = baseStyle.fontFamily;
     contextMenu.style.top = `${posy}px`;
     contextMenu.style.left = `${posx}px`;
     const contextMenuList = document.createElement('ul');
@@ -62,9 +57,9 @@ const contextMenuInit = () => {
     });
   }
 
-  function addContextMenuEventListener() {
+  async function addContextMenuEventListener() {
     if (eventListenerApplied) return;
-    console.log('initContextMenu');
+    log('initContextMenu');
     gradioApp().addEventListener('click', (e) => {
       if (!e.isTrusted) return;
       const oldMenu = gradioApp().querySelector('#context-menu');
@@ -90,41 +85,35 @@ const appendContextMenuOption = initResponse[0];
 const removeContextMenuOption = initResponse[1];
 const addContextMenuEventListener = initResponse[2];
 
-(function () { // eslint-disable-line
-  // Start example Context Menu Items
-  const generateOnRepeat = (genbuttonid, interruptbuttonid) => {
-    const genbutton = gradioApp().querySelector(genbuttonid);
-    const busy = document.getElementById('progressbar')?.style.display === 'block';
-    if (!busy) genbutton.click();
-    clearInterval(window.generateOnRepeatInterval);
-    window.generateOnRepeatInterval = setInterval(
-      () => {
+function initContextMenu() {
+  const generateForever = (genbuttonid, interruptbuttonid) => {
+    if (window.generateOnRepeatInterval) {
+      log('generateForever: cancel');
+      clearInterval(window.generateOnRepeatInterval);
+      window.generateOnRepeatInterval = null;
+    } else {
+      log('generateForever: start');
+      const genbutton = gradioApp().querySelector(genbuttonid);
+      const busy = document.getElementById('progressbar')?.style.display === 'block';
+      if (!busy) genbutton.click();
+      window.generateOnRepeatInterval = setInterval(() => {
         const pbBusy = document.getElementById('progressbar')?.style.display === 'block';
         if (!pbBusy) genbutton.click();
-      },
-      500,
-    );
+      }, 500);
+    }
   };
 
-  appendContextMenuOption('#txt2img_generate', 'Generate forever', () => generateOnRepeat('#txt2img_generate', '#txt2img_interrupt'));
-  appendContextMenuOption('#img2img_generate', 'Generate forever', () => generateOnRepeat('#img2img_generate', '#img2img_interrupt'));
-  const cancelGenerateForever = () => clearInterval(window.generateOnRepeatInterval);
+  for (const tab of ['txt2img', 'img2img']) {
+    for (const el of ['generate', 'interrupt', 'skip', 'pause', 'paste', 'clear_prompt', 'extra_networks_btn']) {
+      const id = `#${tab}_${el}`;
+      appendContextMenuOption(id, 'Copy to clipboard', () => navigator.clipboard.writeText(document.querySelector(`#${tab}_prompt > label > textarea`).value));
+      appendContextMenuOption(id, 'Generate forever', () => generateForever(`#${tab}_generate`));
+      appendContextMenuOption(id, 'Apply selected style', quickApplyStyle);
+      appendContextMenuOption(id, 'Quick save style', quickSaveStyle);
+      appendContextMenuOption(id, 'nVidia overlay', initNVML);
+    }
+  }
+}
 
-  appendContextMenuOption('#txt2img_interrupt', 'Cancel generate forever', cancelGenerateForever);
-  appendContextMenuOption('#txt2img_generate', 'Cancel generate forever', cancelGenerateForever);
-  appendContextMenuOption('#img2img_interrupt', 'Cancel generate forever', cancelGenerateForever);
-  appendContextMenuOption('#img2img_generate', 'Cancel generate forever', cancelGenerateForever);
-  appendContextMenuOption(
-    '#roll',
-    'Roll three',
-    () => {
-      const rollbutton = getUICurrentTabContent().querySelector('#roll');
-      setTimeout(() => { rollbutton.click(); }, 100);
-      setTimeout(() => { rollbutton.click(); }, 200);
-      setTimeout(() => { rollbutton.click(); }, 300);
-    },
-  );
-}());
-// End example Context Menu Items
-
+onUiLoaded(initContextMenu);
 onAfterUiUpdate(() => addContextMenuEventListener());
